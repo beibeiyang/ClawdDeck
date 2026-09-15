@@ -306,6 +306,20 @@ static void pair_tick(void) {
     }
     if (pair_state == PAIR_IDLE) return;
 
+    // Advance before looking at release. On the frame where held crosses the
+    // arm threshold, the AXP POSITIVE edge often lands in the same
+    // power_hal_tick batch — checking release first still sees PENDING and
+    // cancels as "too early", which is what a ~3s hold + prompt release hits.
+    uint32_t held = millis() - pair_long_seen_ms;
+    if (pair_state == PAIR_PENDING && held >= PAIR_ARM_AFTER_LONG_MS) {
+        pair_state = PAIR_ARMED;
+        Serial.println("Pair: armed — release to pair");
+    } else if (pair_state == PAIR_ARMED && held >= PAIR_DISARM_AFTER_LONG_MS) {
+        pair_state = PAIR_IDLE;  // power-off territory; don't pair
+        Serial.println("Pair: disarmed (holding toward power-off)");
+        return;
+    }
+
     if (power_hal_pwr_released()) {
         if (pair_state == PAIR_ARMED) {
             Serial.println("Pair: released in window — clearing bonds, advertising");
@@ -322,15 +336,6 @@ static void pair_tick(void) {
         // to miss; with PWR-as-home it was obvious.
         (void)power_hal_pwr_pressed();
         return;
-    }
-
-    uint32_t held = millis() - pair_long_seen_ms;
-    if (pair_state == PAIR_PENDING && held >= PAIR_ARM_AFTER_LONG_MS) {
-        pair_state = PAIR_ARMED;
-        Serial.println("Pair: armed — release to pair");
-    } else if (pair_state == PAIR_ARMED && held >= PAIR_DISARM_AFTER_LONG_MS) {
-        pair_state = PAIR_IDLE;  // power-off territory; don't pair
-        Serial.println("Pair: disarmed (holding toward power-off)");
     }
 }
 
