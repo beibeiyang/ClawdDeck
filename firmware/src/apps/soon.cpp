@@ -73,7 +73,7 @@ static void soon_create(lv_obj_t* root) {
     extern const AppDef sym = {                            \
         .id = ident, .title = name, .glyph = icon,         \
         .tile_rgb = rgb, .blurb = text,                    \
-        .requires = caps,                                  \
+        .required_caps = caps,                             \
         .persistent = false, .immersive = false,           \
         .create = soon_create, .destroy = nullptr,         \
         .tick = nullptr, .on_button = nullptr,             \

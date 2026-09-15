@@ -113,7 +113,7 @@ void shell_init(void) {
     for (int i = 0; i < apps_count() && visible_n < MAX_VISIBLE_APPS; i++) {
         const AppDef* d = apps_at(i);
         if (!d) continue;
-        if ((d->requires & have) != d->requires) continue;   // board can't run it
+        if ((d->required_caps & have) != d->required_caps) continue;  // board can't run it
         roots[visible_n] = nullptr;
         visible[visible_n++] = d;
     }

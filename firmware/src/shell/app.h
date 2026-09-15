@@ -9,7 +9,7 @@
 // ClawdDeck is a launcher plus a set of apps. An app never touches
 // lv_screen_active(): the shell hands it a root container and the app builds
 // its UI inside that. Apps stay board-agnostic the same way the rest of the
-// shared code does — they declare the hardware they need via `requires` and
+// shared code does — they declare the hardware they need via required_caps and
 // the launcher hides the ones this board can't satisfy. See docs/apps.md.
 
 // Hardware/feature an app depends on. Resolved against board_caps() at boot,
@@ -40,7 +40,10 @@ struct AppDef {
     uint32_t    tile_rgb; // tile background
     const char* blurb;    // one line on what the app does, for Settings/About
 
-    uint32_t    requires;   // bitmask of app_cap_t
+    // Bitmask of app_cap_t. Not named `requires`: that is a reserved keyword
+    // in C++20, which the ESP32 Arduino core compiles with (the simulator's
+    // C++17 build accepts it, so this only breaks on real hardware).
+    uint32_t    required_caps;
 
     // Persistent apps are built once during shell_init() and thereafter only
     // hidden and shown; they are never destroyed. Use this for apps whose
