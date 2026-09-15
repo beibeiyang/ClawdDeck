@@ -4,7 +4,7 @@
 #include <NimBLEHIDDevice.h>
 #include <Preferences.h>
 
-#define DEVICE_NAME "Clawdmeter"
+#define DEVICE_NAME "ClawdDeck"
 
 // Custom GATT UUIDs for data channel
 #define SERVICE_UUID        "4c41555a-4465-7669-6365-000000000001"
@@ -150,7 +150,7 @@ static void start_advertising() {
     NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
     adv->reset();
     // Primary advertising packet (≤31 bytes):
-    //   flags (3) + appearance (4) + HID service 0x1812 (4) + name "Clawdmeter" (12)
+    //   flags (3) + appearance (4) + HID service 0x1812 (4) + name "ClawdDeck" (11)
     //   = 23 bytes. macOS Bluetooth Settings only surfaces BLE-only devices
     //   that explicitly advertise the standard HID service UUID (0x1812) —
     //   without it the device is recognized internally but hidden from the
@@ -402,6 +402,9 @@ void ble_clear_bonds(void) {
     if (state == BLE_STATE_CONNECTED) {
         server->disconnect(server->getPeerInfo(0).getConnHandle());
     }
+    // Flip immediately so the UI can show pairing mode without waiting for the
+    // async disconnect callback (that lag made hold-to-pair look like a no-op).
+    state = BLE_STATE_DISCONNECTED;
     need_advertise = true;
 }
 

@@ -201,6 +201,10 @@ static int      clock_fmt = 24;   // 12 or 24, set from the daemon payload
 static int      clock_last_min = -1;   // last rendered minute; avoids redrawing the title every tick
 static lv_obj_t* usage_group;   // the two usage panels — shown when connected
 static lv_obj_t* pair_group;    // pairing hint — shown when disconnected
+static lv_obj_t* pair_l1 = nullptr;
+static lv_obj_t* pair_l2 = nullptr;
+static lv_obj_t* pair_l3 = nullptr;
+static bool      pairing_mode_ui = false;   // hold-to-pair just fired — show active copy
 static lv_obj_t* bar_session;
 static lv_obj_t* lbl_session_pct;
 static lv_obj_t* lbl_session_label;
@@ -427,18 +431,21 @@ static void build_pair_group(lv_obj_t* parent) {
     lv_obj_add_flag(pair_group, LV_OBJ_FLAG_EVENT_BUBBLE);
 
     lv_obj_t* l1 = lv_label_create(pair_group);
+    pair_l1 = l1;
     lv_label_set_text(l1, "To pair");
     lv_obj_set_style_text_font(l1, L.bt_status_font, 0);
     lv_obj_set_style_text_color(l1, COL_TEXT, 0);
     lv_obj_align(l1, LV_ALIGN_TOP_MID, 0, L.pair_y1);
 
     lv_obj_t* l2 = lv_label_create(pair_group);
+    pair_l2 = l2;
     lv_label_set_text(l2, "hold the power button");
     lv_obj_set_style_text_font(l2, L.bt_device_font, 0);
     lv_obj_set_style_text_color(l2, COL_DIM, 0);
     lv_obj_align(l2, LV_ALIGN_TOP_MID, 0, L.pair_y2);
 
     lv_obj_t* l3 = lv_label_create(pair_group);
+    pair_l3 = l3;
     lv_label_set_text(l3, "for 3 seconds, then release");
     lv_obj_set_style_text_font(l3, L.bt_device_font, 0);
     lv_obj_set_style_text_color(l3, COL_DIM, 0);
@@ -682,11 +689,18 @@ void ui_update(const UsageData* data) {
 // (connected but data has gone stale), or the live usage panels. Only re-lays-out
 // on an actual change. The animated status line stays visible everywhere — it
 // reads "Listening…" on the idle screen, keeping it alive rather than frozen.
+// Default copy for the next time the user needs the hold-to-pair instructions.
+static void restore_pair_hint_text(void) {
+    if (pair_l1) lv_label_set_text(pair_l1, "To pair");
+    if (pair_l2) lv_label_set_text(pair_l2, "hold the power button");
+    if (pair_l3) lv_label_set_text(pair_l3, "for 3 seconds, then release");
+}
+
 static void update_view_state(void) {
     if (!usage_group || !pair_group || !idle_group) return;
     int v;
-    if (!s_ble_connected) {
-        v = 0;  // pairing hint
+    if (pairing_mode_ui || !s_ble_connected) {
+        v = 0;  // pairing hint (instructions or active pairing mode)
     } else if (data_received && data_ok && (lv_tick_get() - last_data_ms) < DATA_FRESH_MS) {
         v = 2;  // live usage
     } else {
@@ -742,7 +756,9 @@ void ui_tick_anim(void) {
 
     // Status text by priority. Whimsical messages only when connected & settled.
     const char* text;
-    if (!s_ble_connected) {
+    if (pairing_mode_ui) {
+        text = "Advertising";          // bonds cleared — waiting for the host
+    } else if (!s_ble_connected) {
         text = "Waiting";              // advertising / waiting for a host connection
     } else if (view_state == 1) {      // idle — alternate so it reads as alive AND data-less
         text = (anim_msg_idx & 1) ? "No data" : "Listening";
@@ -807,8 +823,21 @@ void ui_update_ble_status(ble_state_t state, const char* name, const char* mac) 
     bool was_connected = s_ble_connected;
     s_ble_connected = (state == BLE_STATE_CONNECTED);
 
-    if (s_ble_connected && !was_connected) connected_at_ms = lv_tick_get();
+    if (s_ble_connected && !was_connected) {
+        connected_at_ms = lv_tick_get();
+        pairing_mode_ui = false;
+        restore_pair_hint_text();
+    }
     // pair / idle / usage — picked from connection + data freshness.
+    update_view_state();
+}
+
+void ui_on_pairing_mode(const char* name, const char* mac) {
+    pairing_mode_ui = true;
+    if (pair_l1) lv_label_set_text(pair_l1, "Pairing mode");
+    if (pair_l2) lv_label_set_text(pair_l2, name ? name : "ClawdDeck");
+    if (pair_l3) lv_label_set_text(pair_l3, mac ? mac : "");
+    view_state = -1;   // force a layout refresh even if already on the hint screen
     update_view_state();
 }
 

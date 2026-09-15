@@ -12,6 +12,7 @@
 #include "idle.h"
 #include "idle_cfg.h"
 #include "brightness.h"
+#include "ui.h"
 
 #include "hal/board_caps.h"
 #include "hal/display_hal.h"
@@ -331,6 +332,8 @@ static void pair_tick(void) {
                                       // the pairing hint, so there's little to see
             idle_set_awake_brightness(brightness_get()); // undo any rotation blank
             pair_ignore_short_until = millis() + 500;
+            shell_set_ble(ble_get_state());
+            ui_on_pairing_mode(ble_get_device_name(), ble_get_mac_address());
         } else {
             Serial.println("Pair: released too early — cancelled");
         }
