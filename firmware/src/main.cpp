@@ -275,6 +275,7 @@ void setup() {
     shell_init();
     shell_set_ble(ble_get_state());
     shell_set_battery(power_hal_battery_pct(), power_hal_is_charging());
+    display_hal_tick();   // seed rotation baseline — after LVGL + IMU are up
 
     Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on BLE...\n",
         board_caps().name, W, H);

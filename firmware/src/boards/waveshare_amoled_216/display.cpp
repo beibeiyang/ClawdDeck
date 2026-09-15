@@ -98,39 +98,19 @@ void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h,
     gfx->draw16bitRGBBitmap(dx, dy, rot_buf, dw, dh);
 }
 
-// On rotation change, blank the panel, force a full LVGL redraw at the new
-// orientation, then ramp brightness back up over ~125ms so the transition
-// reads as deliberate.
+// On rotation change, force a full LVGL redraw at the new orientation.
+// Do not blank the panel to brightness 0 here — that ramp could stall (boot
+// IMU settling, idle sleep, IMU flicker) while LVGL keeps rendering, which
+// reads as a dead panel even though the framebuffer is fine over serial.
 void display_hal_tick(void) {
-    static uint8_t  last_rotation = 0;
-    static uint8_t  ramp_step = 0;     // 0=idle, 1..4=ramping
-    static uint32_t ramp_last = 0;
+    static uint8_t last_rotation = 0;
 
     uint8_t rot = imu_hal_rotation_quadrant();
-    if (rot != last_rotation) {
-        display_hal_set_brightness(0);
-        last_rotation = rot;
-        lv_obj_invalidate(lv_screen_active());
-        ramp_step = 1;
-        return;
-    }
+    if (rot == last_rotation) return;
 
-    if (ramp_step == 0) return;
-    uint32_t now = millis();
-    if (now - ramp_last < 25) return;
-    ramp_last = now;
-
-    // Ramp back to the user's chosen brightness (not a hardcoded level), so a
-    // physical rotation doesn't reset what they set via PWR-short-press.
-    static const uint8_t pct[] = {30, 60, 85, 100};
-    uint8_t target = brightness_get();
-    display_hal_set_brightness((uint8_t)(((uint16_t)target * pct[ramp_step - 1]) / 100));
-    if (ramp_step >= 4) {
-        ramp_step = 0;
-        display_hal_set_brightness(target);  // exact level; pct math can round down
-    } else {
-        ramp_step++;
-    }
+    last_rotation = rot;
+    lv_obj_invalidate(lv_screen_active());
+    display_hal_set_brightness(brightness_get());
 }
 
 // CO5300 requires even-aligned flush regions.
