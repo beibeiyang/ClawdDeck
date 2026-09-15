@@ -125,8 +125,12 @@ void display_hal_tick(void) {
     static const uint8_t pct[] = {30, 60, 85, 100};
     uint8_t target = brightness_get();
     display_hal_set_brightness((uint8_t)(((uint16_t)target * pct[ramp_step - 1]) / 100));
-    if (ramp_step >= 4) ramp_step = 0;
-    else                ramp_step++;
+    if (ramp_step >= 4) {
+        ramp_step = 0;
+        display_hal_set_brightness(target);  // exact level; pct math can round down
+    } else {
+        ramp_step++;
+    }
 }
 
 // CO5300 requires even-aligned flush regions.

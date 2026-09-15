@@ -295,6 +295,9 @@ static ble_state_t last_ble_state = BLE_STATE_INIT;
 enum pair_state_t { PAIR_IDLE, PAIR_PENDING, PAIR_ARMED };
 static pair_state_t pair_state        = PAIR_IDLE;
 static uint32_t     pair_long_seen_ms = 0;
+// Release often queues a SHORT edge on the next poll, after pair_state is
+// already IDLE — that was cycling brightness and felt like pairing failed.
+static uint32_t     pair_ignore_short_until = 0;
 
 static void pair_tick(void) {
     if (pair_state == PAIR_IDLE && power_hal_pwr_long_pressed()) {
@@ -324,6 +327,10 @@ static void pair_tick(void) {
         if (pair_state == PAIR_ARMED) {
             Serial.println("Pair: released in window — clearing bonds, advertising");
             ble_clear_bonds();
+            sound_hal_play_reset();   // audible ack — the screen may already show
+                                      // the pairing hint, so there's little to see
+            idle_set_awake_brightness(brightness_get()); // undo any rotation blank
+            pair_ignore_short_until = millis() + 500;
         } else {
             Serial.println("Pair: released too early — cancelled");
         }
@@ -347,10 +354,9 @@ void loop() {
     power_hal_tick();
     imu_hal_tick();
     sound_hal_tick();
-    // Rotation transition (blank + ramp) would fight the idle fade — skip
-    // ticks while the panel is dark. A rotation that happens during sleep
-    // is detected by the next tick after wake and ramped in then.
-    if (!idle_is_asleep()) display_hal_tick();
+    // Always run — skipping while idle-asleep could freeze a rotation blank at
+    // brightness 0 (LVGL keeps rendering; the physical panel stays black).
+    display_hal_tick();
 
     // ---- Physical buttons ----
     //   PRIMARY   → HID Space  (Claude Code voice-mode PTT)
@@ -405,7 +411,9 @@ void loop() {
         pair_tick();
 
         if (power_hal_pwr_pressed()) {
-            if (!idle_consume_wake_press()) {
+            if (millis() < pair_ignore_short_until) {
+                // Companion SHORT from the same release — already consumed above.
+            } else if (!idle_consume_wake_press()) {
                 // PWR is the shell's home key: inside an app it returns to the
                 // launcher, and on the launcher it keeps cycling brightness.
                 // Clawdmeter overrides that with brightness / splash cycling.
