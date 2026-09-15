@@ -7,3 +7,8 @@
 
 void launcher_init(lv_obj_t* parent);
 void launcher_set_visible(bool visible);
+
+// Jump straight to a page (0-based, clamped). Lets a screenshot of any page be
+// scripted over serial, since neither the sim nor a headless capture can swipe.
+void launcher_goto_page(int page);
+int  launcher_page_count(void);

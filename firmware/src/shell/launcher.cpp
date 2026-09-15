@@ -4,6 +4,7 @@
 #include "../theme.h"
 #include "../hal/board_caps.h"
 
+LV_FONT_DECLARE(font_styrene_24);
 LV_FONT_DECLARE(font_styrene_16);
 LV_FONT_DECLARE(font_styrene_14);
 
@@ -36,20 +37,23 @@ static void compute_layout(const BoardCaps& c) {
     const int W = c.width;
     const int H = c.height;
 
-    G.cols  = (W >= 300) ? 3 : 2;
-    G.inset = (W >= 400) ? 28 : (W >= 300) ? 20 : 10;
+    // Fixed 2x2 on every panel: four big tiles per page, paging for the rest.
+    // A 3x3 grid fits, but at arm's length the tiles are small enough to
+    // mis-hit, so we trade density for page count the way the stock Waveshare
+    // launcher does.
+    G.cols     = 2;
+    G.rows     = 2;
+    G.per_page = 4;
+    G.inset    = (W >= 400) ? 28 : (W >= 300) ? 20 : 10;
 
     G.grid_h = H - STATUSBAR_H - LAUNCHER_FOOT_H;
-    G.rows   = (G.grid_h >= 360) ? 3 : 2;
-    G.per_page = G.cols * G.rows;
-
     G.cell_w = (W - 2 * G.inset) / G.cols;
     G.cell_h = G.grid_h / G.rows;
 
     // Leave room beside the tile for breathing space and beneath it for the
     // label; the smaller of the two axes wins so tiles stay square.
     const int by_w = G.cell_w - 20;
-    const int by_h = G.cell_h - 38;
+    const int by_h = G.cell_h - ((W >= 400) ? 44 : 34);
     G.tile = (by_w < by_h) ? by_w : by_h;
     if (G.tile < 36) G.tile = 36;
 
@@ -58,10 +62,13 @@ static void compute_layout(const BoardCaps& c) {
     G.radius    = G.tile * 28 / 100;
     G.label_gap = (G.tile >= 80) ? 8 : 4;
 
-    G.glyph_font = (G.tile >= 88) ? &lv_font_montserrat_40
-                 : (G.tile >= 60) ? &lv_font_montserrat_28
-                                  : &lv_font_montserrat_20;
-    G.label_font = (W >= 400) ? &font_styrene_16 : &font_styrene_14;
+    G.glyph_font = (G.tile >= 140) ? &lv_font_montserrat_48
+                 : (G.tile >=  88) ? &lv_font_montserrat_40
+                 : (G.tile >=  60) ? &lv_font_montserrat_28
+                                   : &lv_font_montserrat_20;
+    G.label_font = (G.tile >= 140) ? &font_styrene_24
+                 : (W    >= 400)   ? &font_styrene_16
+                                   : &font_styrene_14;
 }
 
 static void tile_clicked_cb(lv_event_t* e) {
@@ -203,6 +210,16 @@ void launcher_init(lv_obj_t* parent) {
         refresh_dots();
     }
 }
+
+void launcher_goto_page(int page) {
+    if (!pages || page_count <= 1) return;
+    if (page < 0)           page = 0;
+    if (page >= page_count) page = page_count - 1;
+    lv_obj_scroll_to_x(pages, page * board_caps().width, LV_ANIM_OFF);
+    refresh_dots();
+}
+
+int launcher_page_count(void) { return page_count; }
 
 void launcher_set_visible(bool visible) {
     if (!root) return;

@@ -7,6 +7,7 @@
 #include "data.h"
 #include "ble.h"
 #include "shell/shell.h"
+#include "shell/launcher.h"
 #include "shell/clock_src.h"
 #include "idle.h"
 #include "idle_cfg.h"
@@ -180,6 +181,10 @@ static void check_serial_cmd() {
             else if (strcmp(cmd_buf, "apps") == 0) {
                 for (int i = 0; i < shell_app_count(); i++)
                     Serial.printf("%d %s\n", i, shell_app_at(i)->id);
+            }
+            else if (strncmp(cmd_buf, "page ", 5) == 0) {
+                shell_go_home();
+                launcher_goto_page(atoi(cmd_buf + 5));
             }
             cmd_pos = 0;
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {
