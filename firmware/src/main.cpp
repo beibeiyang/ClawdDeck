@@ -314,6 +314,13 @@ static void pair_tick(void) {
             Serial.println("Pair: released too early — cancelled");
         }
         pair_state = PAIR_IDLE;
+        // A long hold's release often queues a SHORT edge too. If we leave it
+        // for the next loop iteration it fires after pair_state is back to
+        // IDLE and the shell treats it as a normal tap — going home out of
+        // Clawdmeter right after pairing succeeded, which reads as "pairing
+        // didn't work". Upstream only brightness-cycled, so the bug was easy
+        // to miss; with PWR-as-home it was obvious.
+        (void)power_hal_pwr_pressed();
         return;
     }
 
@@ -388,15 +395,20 @@ void loop() {
             }
         }
 
+        // Hold-to-pair runs first so release can clear bonds before a companion
+        // SHORT edge from the same gesture is interpreted as a normal tap.
+        pair_tick();
+
         if (power_hal_pwr_pressed()) {
             if (!idle_consume_wake_press()) {
                 // PWR is the shell's home key: inside an app it returns to the
                 // launcher, and on the launcher it keeps cycling brightness.
-                shell_button(APP_BTN_PWR);
+                // Clawdmeter overrides that with brightness / splash cycling.
+                // While a hold-to-pair gesture is in flight, ignore SHORT so a
+                // mid-gesture edge can't navigate away.
+                if (pair_state == PAIR_IDLE) shell_button(APP_BTN_PWR);
             }
         }
-
-        pair_tick();
     }
 
     ble_state_t bs = ble_get_state();

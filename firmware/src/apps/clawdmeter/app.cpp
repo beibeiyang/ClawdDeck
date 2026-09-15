@@ -2,6 +2,7 @@
 #include "../../ui.h"
 #include "../../splash.h"
 #include "../../usage_rate.h"
+#include "../../brightness.h"
 #include "../../hal/sound_hal.h"
 #include <Arduino.h>
 
@@ -59,6 +60,17 @@ static void clawdmeter_on_ble(ble_state_t state) {
     ui_update_ble_status(state, ble_get_device_name(), ble_get_mac_address());
 }
 
+static bool clawdmeter_on_button(app_btn_t btn) {
+    if (btn != APP_BTN_PWR) return false;
+    // Upstream wired PWR short-press to in-app actions, not navigation. The
+    // shell's default is "home", which broke both brightness cycling and the
+    // hold-to-pair UX: release after a ~3s hold also queues a SHORT edge, and
+    // going home on the next frame made it look like pairing never happened.
+    if (ui_get_current_screen() == SCREEN_SPLASH) splash_next();
+    else                                      brightness_cycle();
+    return true;
+}
+
 static void clawdmeter_on_battery(int percent, bool charging) {
     ui_update_battery(percent, charging);
 }
@@ -76,7 +88,7 @@ extern const AppDef app_clawdmeter = {
     .create     = clawdmeter_create,
     .destroy    = nullptr,         // persistent: never torn down
     .tick       = clawdmeter_tick,
-    .on_button  = nullptr,
+    .on_button  = clawdmeter_on_button,
     .on_usage   = clawdmeter_on_usage,
     .on_ble     = clawdmeter_on_ble,
     .on_battery = clawdmeter_on_battery,
