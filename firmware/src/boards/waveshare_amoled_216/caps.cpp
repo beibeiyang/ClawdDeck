@@ -9,6 +9,9 @@ static const BoardCaps caps = {
     .has_rotation = true,
     .has_battery = true,
     .has_imu = true,
+    .has_sound = true,
+    .has_mic = true,     // ES7210 dual-mic array (I2C 0x40), I2S ASDOUT on GPIO10
+    .has_wifi = true,
 };
 
 const BoardCaps& board_caps(void) { return caps; }

@@ -8,7 +8,15 @@ static const BoardCaps caps = {
     .button_count = 2,      // B and N keys stand in for BOOT + GPIO18
     .has_rotation = false,
     .has_battery = true,    // fake battery, adjustable with -/=
-    .has_imu = false,
+    // Rotation stays off (no accelerometer to drive it), but the IMU is
+    // advertised so the Level tile is reachable on the desktop; sim/imu.cpp
+    // stands in for the sensor.
+    .has_imu = true,
+    // The sim claims sound/mic/wifi so every app tile is reachable on the
+    // desktop; the HALs behind them are stubs that synthesize plausible data.
+    .has_sound = true,
+    .has_mic = true,
+    .has_wifi = true,
 };
 
 const BoardCaps& board_caps(void) { return caps; }

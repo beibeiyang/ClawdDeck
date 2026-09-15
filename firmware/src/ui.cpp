@@ -542,10 +542,13 @@ static void init_usage_screen(lv_obj_t* scr) {
 
 // ======== Public API ========
 
-void ui_init(void) {
+void ui_init(lv_obj_t* parent) {
     compute_layout(board_caps());
 
-    lv_obj_t* scr = lv_screen_active();
+    // Everything below hangs off the shell-provided root instead of the active
+    // screen. Painting it opaque matters: it's what hides the launcher behind
+    // this app rather than letting it show through.
+    lv_obj_t* scr = parent;
     lv_obj_set_style_bg_color(scr, COL_BG, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 

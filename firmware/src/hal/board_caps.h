@@ -18,6 +18,15 @@ struct BoardCaps {
     bool    has_rotation;    // IMU-driven CPU rotation in the flush callback
     bool    has_battery;     // AXP2101 battery measurement is meaningful
     bool    has_imu;         // QMI8658 (or compatible) is populated
+
+    // Added for the app launcher: it hides tiles whose hardware this board
+    // lacks, so an app that needs a mic simply never appears on a mic-less
+    // board. Default false — a port opts in only once the path is verified on
+    // real hardware, which is why boards whose codec is wired but untested
+    // (2.06, 1.8-C6) deliberately leave has_sound off.
+    bool    has_sound;       // speaker playback path works (chime engine)
+    bool    has_mic;         // audio_in capture works (ES7210 on the 2.16)
+    bool    has_wifi;        // station mode is available and verified
 };
 
 const BoardCaps& board_caps(void);

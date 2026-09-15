@@ -5,10 +5,9 @@
 #include <esp_heap_caps.h>
 
 #include "data.h"
-#include "ui.h"
 #include "ble.h"
-#include "splash.h"
-#include "usage_rate.h"
+#include "shell/shell.h"
+#include "shell/clock_src.h"
 #include "idle.h"
 #include "idle_cfg.h"
 #include "brightness.h"
@@ -174,6 +173,14 @@ static void check_serial_cmd() {
             cmd_buf[cmd_pos] = '\0';
             if (strcmp(cmd_buf, "screenshot") == 0) send_screenshot();
             else if (strcmp(cmd_buf, "buzz") == 0)  sound_hal_play_reset();
+            // Navigate without touching the panel, so a screenshot of any app
+            // can be scripted. `apps` lists the ids this board actually shows.
+            else if (strcmp(cmd_buf, "home") == 0)  shell_go_home();
+            else if (strncmp(cmd_buf, "open ", 5) == 0) shell_open_id(cmd_buf + 5);
+            else if (strcmp(cmd_buf, "apps") == 0) {
+                for (int i = 0; i < shell_app_count(); i++)
+                    Serial.printf("%d %s\n", i, shell_app_at(i)->id);
+            }
             cmd_pos = 0;
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {
             cmd_buf[cmd_pos++] = c;
@@ -228,10 +235,11 @@ void setup() {
     ble_init();
     input_hal_init();
 
-    ui_init();
-    ui_update_ble_status(ble_get_state(), ble_get_device_name(), ble_get_mac_address());
-    ui_update_battery(power_hal_battery_pct(), power_hal_is_charging());
-    ui_show_screen(SCREEN_SPLASH);
+    // The shell owns the screen from here: it builds the status bar, the
+    // launcher and the persistent apps, then lands on the home screen.
+    shell_init();
+    shell_set_ble(ble_get_state());
+    shell_set_battery(power_hal_battery_pct(), power_hal_is_charging());
 
     Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on BLE...\n",
         board_caps().name, W, H);
@@ -288,13 +296,11 @@ static void pair_tick(void) {
 void loop() {
     idle_tick();
     lv_timer_handler();
-    ui_tick_anim();
+    shell_tick();       // status bar + the foreground app's own tick
     ble_tick();
     power_hal_tick();
     imu_hal_tick();
     sound_hal_tick();
-    splash_tick();
-    splash_mascot_tick();
     // Rotation transition (blank + ramp) would fight the idle fade — skip
     // ticks while the panel is dark. A rotation that happens during sleep
     // is detected by the next tick after wake and ramped in then.
@@ -312,14 +318,19 @@ void loop() {
     {
         static bool primary_was = false;
         static bool primary_wake_swallowed = false;
+        static bool primary_app_consumed = false;
         bool primary_now = input_hal_is_held(INPUT_BTN_PRIMARY);
         if (primary_now != primary_was) {
             if (primary_now) {
-                if (idle_consume_wake_press()) primary_wake_swallowed = true;
-                else                            ble_keyboard_press(0x2C, 0);  // HID Space, no mods
+                // Offer the press to the foreground app first (Voice uses it as
+                // push-to-talk); only fall through to HID if nobody wants it.
+                if (idle_consume_wake_press())          primary_wake_swallowed = true;
+                else if (shell_button(APP_BTN_PRIMARY)) primary_app_consumed = true;
+                else ble_keyboard_press(0x2C, 0);  // HID Space, no mods
             } else {
-                if (primary_wake_swallowed) primary_wake_swallowed = false;
-                else                        ble_keyboard_release();
+                if (primary_wake_swallowed)   primary_wake_swallowed = false;
+                else if (primary_app_consumed) primary_app_consumed = false;
+                else                           ble_keyboard_release();
             }
             primary_was = primary_now;
         }
@@ -327,14 +338,17 @@ void loop() {
         if (board_caps().button_count >= 2) {
             static bool secondary_was = false;
             static bool secondary_wake_swallowed = false;
+            static bool secondary_app_consumed = false;
             bool secondary_now = input_hal_is_held(INPUT_BTN_SECONDARY);
             if (secondary_now != secondary_was) {
                 if (secondary_now) {
-                    if (idle_consume_wake_press()) secondary_wake_swallowed = true;
-                    else                            ble_keyboard_press(0x2B, 0x02);  // HID Tab + LEFT_SHIFT
+                    if (idle_consume_wake_press())            secondary_wake_swallowed = true;
+                    else if (shell_button(APP_BTN_SECONDARY)) secondary_app_consumed = true;
+                    else ble_keyboard_press(0x2B, 0x02);  // HID Tab + LEFT_SHIFT
                 } else {
-                    if (secondary_wake_swallowed) secondary_wake_swallowed = false;
-                    else                          ble_keyboard_release();
+                    if (secondary_wake_swallowed)    secondary_wake_swallowed = false;
+                    else if (secondary_app_consumed) secondary_app_consumed = false;
+                    else                             ble_keyboard_release();
                 }
                 secondary_was = secondary_now;
             }
@@ -342,10 +356,9 @@ void loop() {
 
         if (power_hal_pwr_pressed()) {
             if (!idle_consume_wake_press()) {
-                // On splash: cycle animations. On the usage view: cycle
-                // screen brightness (single non-splash view, no more screens).
-                if (ui_get_current_screen() == SCREEN_SPLASH) splash_next();
-                else                                          brightness_cycle();
+                // PWR is the shell's home key: inside an app it returns to the
+                // launcher, and on the launcher it keeps cycling brightness.
+                shell_button(APP_BTN_PWR);
             }
         }
 
@@ -355,7 +368,7 @@ void loop() {
     ble_state_t bs = ble_get_state();
     if (bs != last_ble_state) {
         last_ble_state = bs;
-        ui_update_ble_status(bs, ble_get_device_name(), ble_get_mac_address());
+        shell_set_ble(bs);
     }
 
     static int  last_pct      = -2;
@@ -366,29 +379,18 @@ void loop() {
         if (pct != last_pct) ble_set_battery_level(pct);
         last_pct = pct;
         last_charging = charging;
-        ui_update_battery(pct, charging);
+        shell_set_battery(pct, charging);
     }
 
     check_serial_cmd();
 
     if (ble_has_data()) {
         if (parse_json(ble_get_data(), &usage)) {
-            int g_before = usage_rate_group();
-            bool session_reset = usage_rate_sample(usage.session_pct);
-            int g_after = usage_rate_group();
-            // 5-hour session limit refilled → chime so the user knows they can
-            // use Claude again (no-op on boards without a buzzer). Gated on the
-            // daemon's opt-in `chime` config; the `buzz` serial cmd ignores it.
-            if (session_reset && usage.chime) {
-                Serial.println("session reset detected — chime");
-                sound_hal_play_reset();
-            }
-            if (g_after != g_before) {
-                Serial.printf("usage rate: group %d -> %d (s=%.2f%%)\n",
-                    g_before, g_after, usage.session_pct);
-                if (splash_is_active()) splash_pick_for_current_rate();
-            }
-            ui_update(&usage);
+            // Wall-clock time is device-wide (the status bar and Clock app use
+            // it), so it's unpacked here; everything else about a usage payload
+            // is Clawdmeter's business and handled in its on_usage hook.
+            clock_src_set(usage.clock_epoch, usage.clock_fmt);
+            shell_set_usage(&usage);
             ble_send_ack();
         } else {
             ble_send_nack();

@@ -14,8 +14,12 @@ void delay(unsigned long ms);
 class SimSerial {
 public:
     void begin(unsigned long baud) { (void)baud; }
-    int  available(void) { return 0; }
-    int  read(void) { return -1; }
+    // Backed by non-blocking stdin (see arduino_shim.cpp), so the simulator
+    // honours the same serial command set as real hardware — `screenshot`,
+    // `open <app>`, `home`. That makes every app screen scriptable headlessly:
+    //   printf 'open voice\n' | SDL_VIDEODRIVER=dummy ./program
+    int  available(void);
+    int  read(void);
     size_t write(const uint8_t* buf, size_t len);
     void flush(void) { fflush(stdout); }
     void print(const char* s) { fputs(s, stdout); }

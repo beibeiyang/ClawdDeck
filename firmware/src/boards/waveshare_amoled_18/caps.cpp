@@ -9,6 +9,7 @@ static const BoardCaps caps = {
     .has_rotation = false,
     .has_battery = true,
     .has_imu = true,
+    .has_sound = true,   // chime verified on hardware (amp = GPIO46 only)
 };
 
 const BoardCaps& board_caps(void) { return caps; }
