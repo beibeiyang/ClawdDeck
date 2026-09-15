@@ -108,6 +108,4 @@ SOON_APP(app_hostmon, "hostmon", "Host", LV_SYMBOL_DRIVE, 0x7a4b6b,
          APP_CAP_WIFI,
          "Your dev machine's CPU, memory and network at a glance.");
 
-SOON_APP(app_settings, "settings", "Settings", LV_SYMBOL_SETTINGS, 0x3a3a38,
-         APP_CAP_NONE,
-         "Brightness, Wi-Fi, pairing, volume and about.");
+// Settings now lives in apps/settings/app.cpp.

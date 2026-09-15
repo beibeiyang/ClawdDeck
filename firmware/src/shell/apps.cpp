@@ -13,9 +13,9 @@ extern const AppDef app_level;
 extern const AppDef app_hostmon;
 extern const AppDef app_settings;
 
-// Launcher order. Nine apps fill exactly one 3x3 page on a 480x480 panel;
-// smaller boards page automatically, and any app whose hardware is missing is
-// filtered out by the shell before the grid is built.
+// Launcher order. The grid is a fixed 2x2, so nine apps span three pages on
+// every panel, and any app whose hardware is missing is filtered out by the
+// shell before the grid is built.
 static const AppDef* const table[] = {
     &app_clawdmeter,
     &app_voice,
