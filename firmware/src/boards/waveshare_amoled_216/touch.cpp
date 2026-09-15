@@ -30,36 +30,48 @@ void touch_hal_init(void) {
     Serial.println("Touch init OK");
 }
 
-// Undo the software display rotation so LVGL gets coordinates in its own,
-// unrotated frame.
+// Quadrant the setSwapXY/setMirrorXY calibration above was tuned against.
+//
+// Those calls are not a raw sensor->panel mapping: they were chosen so that
+// reported points land directly in LVGL's frame for the orientation the board
+// normally sits in, which the IMU reports as 3 (measured on hardware, not
+// assumed). The rotation compensation is therefore already baked into them.
+#define TOUCH_CAL_QUADRANT 3
+
+// Bring a reported point into LVGL's frame across a rotation.
 //
 // This board can't rotate in hardware (the CO5300's MADCTL only flips axes),
-// so display.cpp rotates pixels on the CPU in rotate_strip(): it maps LVGL
-// (x,y) to panel (px,py). The touch controller reports *panel* coordinates,
-// so without the inverse map a rotated device sends taps to the wrong widget.
+// so display.cpp rotates pixels on the CPU in rotate_strip(), mapping LVGL
+// (x,y) to panel (px,py). Touch reports its own pre-calibrated frame, so what
+// we owe is the *delta* between the current quadrant and the calibration
+// baseline. Applying rotate_strip()'s absolute inverse instead double-counts
+// the baseline and rotates every tap by 90 degrees -- which is what hardware
+// testing showed: the four launcher tiles resolved in a closed TL->TR->BR->BL
+// cycle, in both orientations.
 //
-// Upstream never hit this because its only gesture was "tap anywhere to
-// toggle" — with no spatially distinct targets a rotated touch frame is
-// harmless. The launcher's tile grid is the first thing that exposes it.
+// Deriving it: with P the reported point, B the baseline quadrant and q the
+// current one, P = F_B^-1(F_q(L)), so L = F_q^-1(F_B(P)) -- a rotation by
+// (B - q) steps. At q == B that collapses to identity, preserving the
+// known-good behaviour the old tap-anywhere UI depended on.
 //
-// Inverting the forward transforms in rotate_strip(), keyed off the same
-// imu_hal_rotation_quadrant() the renderer uses, keeps the two agreeing by
-// construction rather than by guessing the panel's physical orientation:
-//   q=1  90°: (x,y)->(S-1-y, x)        inverse: x=py,       y=S-1-px
-//   q=2 180°: (x,y)->(S-1-x, S-1-y)    inverse: x=S-1-px,   y=S-1-py
-//   q=3 270°: (x,y)->(y, S-1-x)        inverse: x=S-1-py,   y=px
-static void unrotate_point(uint16_t* x, uint16_t* y) {
+// F_k below are rotate_strip()'s forward maps, so the two stay in step:
+//   k=1  90°: (x,y)->(S-1-y, x)
+//   k=2 180°: (x,y)->(S-1-x, S-1-y)
+//   k=3 270°: (x,y)->(y, S-1-x)
+static void rotate_to_lvgl(uint16_t* x, uint16_t* y) {
     // rotate_strip() assumes a square panel too (it uses LCD_WIDTH for both
     // axes), which holds for this 480x480 board.
     const uint16_t S  = LCD_WIDTH;
     const uint16_t px = *x;
     const uint16_t py = *y;
+    const uint8_t  k  =
+        (uint8_t)((TOUCH_CAL_QUADRANT - imu_hal_rotation_quadrant()) & 3);
 
-    switch (imu_hal_rotation_quadrant()) {
-    case 1: *x = py;                    *y = (uint16_t)(S - 1 - px); break;
+    switch (k) {
+    case 1: *x = (uint16_t)(S - 1 - py); *y = px;                     break;
     case 2: *x = (uint16_t)(S - 1 - px); *y = (uint16_t)(S - 1 - py); break;
-    case 3: *x = (uint16_t)(S - 1 - py); *y = px;                    break;
-    default: break;   // q=0, panel and LVGL frames already agree
+    case 3: *x = py;                     *y = (uint16_t)(S - 1 - px); break;
+    default: break;   // aligned with the calibration, nothing to do
     }
 }
 
@@ -81,5 +93,5 @@ void touch_hal_read(uint16_t* x, uint16_t* y, bool* pressed) {
     *x = touch_x;
     *y = touch_y;
     *pressed = touch_pressed;
-    unrotate_point(x, y);
+    rotate_to_lvgl(x, y);
 }

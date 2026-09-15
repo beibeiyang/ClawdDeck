@@ -58,11 +58,33 @@ static void rounder_cb(lv_event_t* e) {
 //   false → touch never counts as activity and is fully swallowed while the
 //           panel is dark, so pets/sleeves can't wake it overnight and LVGL
 //           can't quietly toggle splash<->usage on a black panel.
+// `touchdbg` toggles a press-edge dump of the point LVGL is about to act on,
+// plus the rotation quadrant. Tapping a known tile and comparing the reported
+// point against that tile's centre is the only way to pin down where a
+// rotated-frame mismatch actually enters the chain.
+// Press-edge dump of the point LVGL is about to act on, plus the rotation
+// quadrant. Toggled by `touchdbg`; `imu` reads the quadrant without needing a
+// tap at all, which is what makes a four-orientation check controlled instead
+// of guesswork.
+//
+// Note when arming this over serial: opening the port resets the board, so a
+// command sent immediately after connecting lands mid-boot and is dropped.
+// Wait for the ready banner, or read the echo back and retry.
+static bool touch_debug = false;
+
 static void my_touch_cb(lv_indev_t* indev, lv_indev_data_t* data) {
     uint16_t x, y;
     bool pressed;
     touch_hal_read(&x, &y, &pressed);
     const bool raw_pressed = pressed;
+
+    if (touch_debug) {
+        static bool dbg_was = false;
+        if (raw_pressed && !dbg_was)
+            Serial.printf("TOUCH q=%u x=%u y=%u\n",
+                          imu_hal_rotation_quadrant(), x, y);
+        dbg_was = raw_pressed;
+    }
 
     if (IDLE_WAKE_ON_TOUCH) {
         static bool touch_was = false;
@@ -185,6 +207,13 @@ static void check_serial_cmd() {
             else if (strncmp(cmd_buf, "page ", 5) == 0) {
                 shell_go_home();
                 launcher_goto_page(atoi(cmd_buf + 5));
+            }
+            else if (strcmp(cmd_buf, "touchdbg") == 0) {
+                touch_debug = !touch_debug;
+                Serial.printf("touchdbg %s\n", touch_debug ? "on" : "off");
+            }
+            else if (strcmp(cmd_buf, "imu") == 0) {
+                Serial.printf("IMU q=%u\n", imu_hal_rotation_quadrant());
             }
             cmd_pos = 0;
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {

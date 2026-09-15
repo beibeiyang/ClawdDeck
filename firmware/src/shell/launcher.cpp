@@ -4,7 +4,7 @@
 #include "../theme.h"
 #include "../hal/board_caps.h"
 
-LV_FONT_DECLARE(font_styrene_24);
+LV_FONT_DECLARE(font_styrene_28);
 LV_FONT_DECLARE(font_styrene_16);
 LV_FONT_DECLARE(font_styrene_14);
 
@@ -52,8 +52,8 @@ static void compute_layout(const BoardCaps& c) {
 
     // Leave room beside the tile for breathing space and beneath it for the
     // label; the smaller of the two axes wins so tiles stay square.
-    const int by_w = G.cell_w - 20;
-    const int by_h = G.cell_h - ((W >= 400) ? 44 : 34);
+    const int by_w = G.cell_w - ((W >= 400) ? 44 : 20);
+    const int by_h = G.cell_h - ((W >= 400) ? 60 : 34);
     G.tile = (by_w < by_h) ? by_w : by_h;
     if (G.tile < 36) G.tile = 36;
 
@@ -62,11 +62,11 @@ static void compute_layout(const BoardCaps& c) {
     G.radius    = G.tile * 28 / 100;
     G.label_gap = (G.tile >= 80) ? 8 : 4;
 
-    G.glyph_font = (G.tile >= 140) ? &lv_font_montserrat_48
+    G.glyph_font = (G.tile >= 150) ? &lv_font_montserrat_48
                  : (G.tile >=  88) ? &lv_font_montserrat_40
                  : (G.tile >=  60) ? &lv_font_montserrat_28
                                    : &lv_font_montserrat_20;
-    G.label_font = (G.tile >= 140) ? &font_styrene_24
+    G.label_font = (G.tile >= 120) ? &font_styrene_28
                  : (W    >= 400)   ? &font_styrene_16
                                    : &font_styrene_14;
 }
