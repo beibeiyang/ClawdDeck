@@ -30,3 +30,10 @@ chime = off
 #   12   = show the clock, forced 12-hour  (e.g. 6:28 PM)
 #   24   = show the clock, forced 24-hour  (e.g. 18:28)
 clock = off
+
+# macOS only: which terminal app opens when you resume a Claude Code session
+# from the deck's Sessions app (tap a row → `claude --resume` on your Mac).
+#   iterm    = iTerm2 (default)
+#   terminal = Terminal.app
+# Re-read every poll cycle — no daemon restart needed.
+resume_terminal = iterm

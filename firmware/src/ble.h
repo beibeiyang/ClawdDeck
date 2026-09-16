@@ -21,6 +21,10 @@ void ble_send_ack(void);
 void ble_send_nack(void);
 void ble_request_refresh(void);
 
+// Host bridge (Sessions app): device notifies commands, host writes responses.
+void ble_bridge_send_cmd(const char* json);
+const char* ble_bridge_take_rx(void);
+
 void ble_set_battery_level(int pct);
 
 // BLE HID keyboard

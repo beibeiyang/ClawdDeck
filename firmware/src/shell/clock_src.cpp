@@ -40,3 +40,31 @@ void clock_src_format(char* buf, size_t len) {
         snprintf(buf, len, "%02d:%02d", t.tm_hour, t.tm_min);
     }
 }
+
+void clock_src_format_hms(char* buf, size_t len) {
+    struct tm t;
+    if (!clock_src_now(&t)) {
+        snprintf(buf, len, "--:--:--");
+        return;
+    }
+    if (s_fmt == 12) {
+        int h12 = t.tm_hour % 12;
+        if (h12 == 0) h12 = 12;
+        snprintf(buf, len, "%d:%02d:%02d %s", h12, t.tm_min, t.tm_sec,
+                 t.tm_hour < 12 ? "AM" : "PM");
+    } else {
+        snprintf(buf, len, "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
+    }
+}
+
+void clock_src_format_date(char* buf, size_t len) {
+    struct tm t;
+    if (!clock_src_now(&t)) {
+        snprintf(buf, len, "Waiting for host time…");
+        return;
+    }
+    static const char* days[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    static const char* months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    snprintf(buf, len, "%s, %s %d", days[t.tm_wday], months[t.tm_mon], t.tm_mday);
+}

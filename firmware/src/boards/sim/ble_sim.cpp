@@ -120,6 +120,31 @@ void ble_send_nack(void) { printf("[sim] payload NACKed — check the scenario J
 void ble_request_refresh(void) {}
 void ble_set_battery_level(int pct) { (void)pct; }
 
+static char bridge_rx_buf[512];
+static bool bridge_pending = false;
+
+void ble_bridge_send_cmd(const char* json) {
+    if (!json) return;
+    if (strstr(json, "\"ls\"")) {
+        snprintf(bridge_rx_buf, sizeof(bridge_rx_buf),
+                 "{\"t\":\"ss\",\"n\":["
+                 "{\"i\":\"sim-001\",\"l\":\"Fix Mic Scope on ClawdDeck\",\"p\":\"ClawdDeck\"},"
+                 "{\"i\":\"sim-002\",\"l\":\"Gravity Ball factory port\",\"p\":\"ClawdDeck\"}"
+                 "]}");
+        bridge_pending = true;
+    } else if (strstr(json, "\"rs\"")) {
+        snprintf(bridge_rx_buf, sizeof(bridge_rx_buf),
+                 "{\"t\":\"ok\",\"m\":\"Sim resume (no Terminal)\"}");
+        bridge_pending = true;
+    }
+}
+
+const char* ble_bridge_take_rx(void) {
+    if (!bridge_pending) return nullptr;
+    bridge_pending = false;
+    return bridge_rx_buf;
+}
+
 void ble_keyboard_press(uint8_t key, uint8_t modifier) {
     printf("[sim] HID press key=0x%02X mod=0x%02X\n", key, modifier);
 }

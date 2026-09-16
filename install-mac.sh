@@ -132,6 +132,28 @@ configure_chime() {
     fi
 }
 
+# Which macOS terminal opens resumed Claude Code sessions from the deck.
+configure_resume_terminal() {
+    [ -t 0 ] || return 0
+    local ans
+    echo "  Sessions app: tap a row on the deck to run claude --resume on this Mac."
+    read -r -p "  Open resumed sessions in [i]Term / [T]erminal.app? [i/T] " ans || ans=""
+    ans=$(echo "$ans" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    case "$ans" in
+        t|terminal)
+            upsert_config_key resume_terminal terminal
+            echo "  Set: resume_terminal = terminal"
+            ;;
+        ""|i|iterm)
+            upsert_config_key resume_terminal iterm
+            echo "  Set: resume_terminal = iterm"
+            ;;
+        *)
+            echo "  Unrecognized '$ans' — leaving resume_terminal unchanged."
+            ;;
+    esac
+}
+
 echo "=== Clawdmeter macOS install ==="
 echo ""
 
@@ -213,6 +235,7 @@ echo "[4/6] Configuring the daemon..."
 configure_config_dirs
 configure_clock
 configure_chime
+configure_resume_terminal
 echo ""
 
 echo "[5/6] Bluetooth permission check..."

@@ -99,9 +99,8 @@ void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h,
 }
 
 // On rotation change, force a full LVGL redraw at the new orientation.
-// Do not blank the panel to brightness 0 here — that ramp could stall (boot
-// IMU settling, idle sleep, IMU flicker) while LVGL keeps rendering, which
-// reads as a dead panel even though the framebuffer is fine over serial.
+// Gravity Ball temporarily freezes imu_hal_rotation_quadrant(), so this stays
+// stable while that app is open and resumes as soon as the app closes.
 void display_hal_tick(void) {
     static uint8_t last_rotation = 0;
 

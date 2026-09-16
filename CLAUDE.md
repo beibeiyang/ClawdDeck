@@ -30,7 +30,7 @@ Connects to a host daemon over BLE; daemon polls Anthropic API for usage data. T
 - Display: **CO5300** AMOLED via QSPI (CS=12, SCLK=38, SDIO0..3=4..7, RST=2)
 - Touch: **CST9220** via I2C (SDA=15, SCL=14, INT=11, addr=0x5A)
 - PMU: **AXP2101** on same I2C bus (addr=0x34) — battery, USB VBUS, PWR button IRQ
-- IMU: **QMI8658** on same I2C bus (addr=0x6B) — accelerometer for auto-rotation
+- IMU: **QMI8658** on same I2C bus (addr=0x6B) — accelerometer for auto-rotation and motion apps
 - Buttons: GPIO 0 (left → Space/voice-mode), GPIO 18 (right → Shift+Tab/mode-toggle), AXP PKEY (middle → cycle screens; on splash → cycle animations)
 
 ### AMOLED-1.8 (newer port)
@@ -84,7 +84,7 @@ firmware/src/
     power_hal.h             — init / tick / battery_pct / is_charging / pwr_pressed (edge)
     imu_hal.h               — init / tick / rotation_quadrant
   boards/
-    waveshare_amoled_216/   — CO5300 + CST9220 + AXP PKEY + QMI8658 rotation
+    waveshare_amoled_216/   — CO5300 + CST9220 + AXP PKEY + QMI8658 rotation/motion
     waveshare_amoled_18/    — SH8601 + FT3168 + AXP + XCA9554 (PWR via EXIO4), no rotation
     waveshare_amoled_216_c6/— C6: SH8601 + CST9217 + AXP PKEY, no PSRAM
     waveshare_amoled_18_c6/ — C6: SH8601 + FT3168 + AXP PKEY + TCA9554 (gates power), no PSRAM
@@ -168,7 +168,7 @@ The boot screen is `SCREEN_SPLASH` and only advances on a physical button press,
 
 ## Critical gotchas
 
-1. **CO5300 cannot rotate.** Its MADCTL only supports axis flips, not column/row exchange. Rotation is done by **CPU pixel remapping inside `display_hal_draw_bitmap`** in `boards/waveshare_amoled_216/display.cpp`. We use **PARTIAL render mode with strip rotation** (small 480×40 strips, fast). On rotation change → AMOLED brightness flash → force redraw (handled inside `display_hal_tick`).
+1. **CO5300 cannot rotate in hardware.** Its MADCTL only supports axis flips, not column/row exchange, so the 2.16 uses CPU pixel remapping inside `display_hal_draw_bitmap`. Gravity Ball calls `imu_hal_set_rotation_locked(true)` on entry and unlocks on exit; other screens auto-rotate normally. Touch must use the same display-facing quadrant.
 2. **OPI PSRAM** required: `board_build.arduino.memory_type = qio_opi` in platformio.ini. Without this, `MALLOC_CAP_SPIRAM` returns NULL and the screen is black.
 3. **pioarduino platform required.** GFX Library for Arduino needs Arduino Core 3.x (`esp32-hal-periman.h`), not the 2.x that standard `espressif32` ships. We pin `pioarduino/platform-espressif32` 55.03.38-1.
 4. **LVGL 9 font patching.** `lv_font_conv` outputs LVGL 8 format. Must remove `#if LVGL_VERSION_MAJOR >= 8` guards, drop `.cache` field, add `.release_glyph`, `.kerning`, `.static_bitmap`, `.fallback`, `.user_data`. Without patching, fonts render invisible. Full regeneration recipe: `docs/fonts.md`.
@@ -240,7 +240,7 @@ See `~/.claude/projects/.../memory/` files for persistent context (user is an em
 - **Device-abstraction refactor (2026-05-18).** All board-conditional code moved out of shared files into `boards/<name>/` and behind a HAL in `hal/`. ~30 `#ifdef BOARD_*` blocks went to zero. UI is responsive via `compute_layout()` driven by `board_caps()`. New ports add a folder + a PlatformIO env — no shared file edits.
 - Added second board port: Waveshare AMOLED-1.8 (368×448 portrait, SH8601, FT3168, XCA9554 IO expander).
 - Migrated from Panlee SC01 Plus (480×320 IPS) to Waveshare 2.16" AMOLED (480×480 square). Full hardware/library swap.
-- Added IMU auto-rotation, battery indicator, USB-state-aware screen switching.
+- Added IMU auto-rotation, battery indicator, USB-state-aware screen switching. Gravity Ball alone freezes the active orientation while open.
 - Added splash screen with scraped pixel-art animations and 3-button physical input layout.
 - Fonts and icons re-scaled ~1.9× for the higher-DPI panel.
 - All UI margins widened to 20px to clear the rounded display corners.

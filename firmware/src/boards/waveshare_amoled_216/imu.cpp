@@ -5,7 +5,7 @@
 #include <SensorQMI8658.hpp>
 
 // Poll and hysteresis timing
-#define IMU_POLL_MS       100    // ~10 Hz
+#define IMU_POLL_MS       48     // match the 21 Hz low-power sensor output
 #define STABLE_TIME_MS    300    // orientation must hold this long before rotating
 #define TILT_THRESHOLD    0.5f   // ~30° from axis (sin 30° ≈ 0.5)
 
@@ -14,7 +14,12 @@ static uint8_t  current_rotation   = 0;
 static uint8_t  candidate_rotation = 0;
 static uint32_t candidate_since    = 0;
 static uint32_t last_poll_ms       = 0;
-static bool     imu_ok             = false;
+static float    last_ax = 0.0f;
+static float    last_ay = 0.0f;
+static float    last_az = 1.0f;
+static bool     imu_ok  = false;
+static bool     rotation_locked = false;
+static uint8_t  locked_rotation = 0;
 
 static uint8_t accel_to_rotation(float ax, float ay) {
     float abs_ax = fabsf(ax);
@@ -49,6 +54,10 @@ void imu_hal_tick(void) {
     float ax, ay, az;
     if (!imu.getAccelerometer(ax, ay, az)) return;
 
+    last_ax = ax;
+    last_ay = ay;
+    last_az = az;
+
     uint8_t target = accel_to_rotation(ax, ay);
     if (target == 255 || target == current_rotation) {
         candidate_rotation = current_rotation;
@@ -59,8 +68,31 @@ void imu_hal_tick(void) {
         candidate_since = now;
     } else if (now - candidate_since >= STABLE_TIME_MS) {
         current_rotation = target;
-        Serial.printf("Rotation: %d\n", current_rotation);
+        Serial.printf("Rotation: %d%s\n", current_rotation,
+                      rotation_locked ? " (display locked)" : "");
     }
 }
 
-uint8_t imu_hal_rotation_quadrant(void) { return current_rotation; }
+uint8_t imu_hal_rotation_quadrant(void) {
+    return rotation_locked ? locked_rotation : current_rotation;
+}
+
+void imu_hal_set_rotation_locked(bool locked) {
+    if (locked && !rotation_locked) locked_rotation = current_rotation;
+    rotation_locked = locked;
+}
+
+bool imu_hal_ready(void) { return imu_ok; }
+
+bool imu_hal_read_accel(float* ax, float* ay, float* az) {
+    if (!imu_ok || !ax || !ay || !az) return false;
+    *ax = last_ax;
+    *ay = last_ay;
+    *az = last_az;
+    return true;
+}
+
+bool imu_hal_read_accel_live(float* ax, float* ay, float* az) {
+    if (!imu_ok || !ax || !ay || !az) return false;
+    return imu.getAccelerometer(*ax, *ay, *az);
+}

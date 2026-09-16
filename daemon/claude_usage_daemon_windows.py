@@ -174,11 +174,14 @@ def detect_hour_format() -> int:
 
 
 def add_clock_fields(payload: dict) -> None:
-    """Add "t" (local wall-clock epoch) + "tf" (12|24) when the config opts in."""
+    """Add wall-clock fields on every payload (see claude_usage_daemon.py)."""
     clock = read_clock_setting()
-    if clock == "off":
-        return
-    tf = 24 if clock == "24" else 12 if clock == "12" else detect_hour_format()
+    if clock == "24":
+        tf = 24
+    elif clock == "12":
+        tf = 12
+    else:
+        tf = detect_hour_format()
     payload["t"] = int(time.time()) + time.localtime().tm_gmtoff
     payload["tf"] = tf
 

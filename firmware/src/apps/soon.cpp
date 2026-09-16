@@ -80,36 +80,6 @@ static void soon_create(lv_obj_t* root) {
         .on_usage = nullptr, .on_ble = nullptr, .on_battery = nullptr, \
     }
 
-SOON_APP(app_voice, "voice", "Voice", LV_SYMBOL_AUDIO, 0x788c5d,
-         APP_CAP_MIC | APP_CAP_WIFI | APP_CAP_PSRAM,
-         "Hold to talk. Whisper runs on your Mac and the text goes straight into Claude Code.");
-
-// There is deliberately no macro-pad app here.
-//
-// The BLE HID keyboard is still used -- the physical buttons type Space and
-// Shift+Tab -- but a screenful of keys doesn't earn a tile when you're sat at
-// a real keyboard, and a blind keystroke lands in whatever window has focus
-// with no feedback that it went to the wrong one. The two keystrokes that do
-// carry their weight need context a generic pad can't give, so they live where
-// that context is: push-to-talk in Voice (which shows it's listening) and
-// approve/deny in Sessions (which shows what's being asked).
-
-SOON_APP(app_sessions, "sessions", "Sessions", LV_SYMBOL_LIST, 0x6b5b95,
-         APP_CAP_BLE,
-         "What Claude Code is doing right now, and approve or deny its permission prompts.");
-
-SOON_APP(app_clock, "clock", "Clock", LV_SYMBOL_BELL, 0x2f4858,
-         APP_CAP_NONE,
-         "Watch face, timers and alarms on the onboard RTC.");
-
-SOON_APP(app_micscope, "micscope", "Mic Scope", LV_SYMBOL_VOLUME_MAX, 0x3d7068,
-         APP_CAP_MIC,
-         "Live level and spectrum from the dual mic array. Doubles as the mic self-test.");
-
-SOON_APP(app_level, "level", "Level", LV_SYMBOL_GPS, 0x8a7d5c,
-         APP_CAP_IMU,
-         "Bubble level and live gyro readout from the QMI8658.");
-
 SOON_APP(app_hostmon, "hostmon", "Host", LV_SYMBOL_DRIVE, 0x7a4b6b,
          APP_CAP_WIFI,
          "Your dev machine's CPU, memory and network at a glance.");

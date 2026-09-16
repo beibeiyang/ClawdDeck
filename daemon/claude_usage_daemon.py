@@ -24,10 +24,21 @@ import httpx
 from bleak import BleakClient
 from bleak.exc import BleakError
 
+from claude_sessions import (
+    find_session_cwd,
+    list_recent_sessions,
+    read_resume_terminal_setting,
+    resume_session_mac,
+    resume_terminal_label,
+    sessions_payload,
+)
+
 DEVICE_NAME = "ClawdDeck"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
 REQ_CHAR_UUID = "4c41555a-4465-7669-6365-000000000004"
+HOST_RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000005"
+DEV_CMD_CHAR_UUID = "4c41555a-4465-7669-6365-000000000006"
 
 POLL_INTERVAL = 60
 TICK = 5
@@ -390,16 +401,16 @@ def detect_hour_format() -> int:
 
 
 def add_clock_fields(payload: dict) -> None:
-    """Add wall-clock fields to the payload when the config opts in.
-
-    "t"  = local wall-clock epoch (UTC epoch shifted by the tz offset) so the
-           device can show the time without an RTC.
-    "tf" = 12 or 24, the hour format the device should render.
-    """
+    """Add wall-clock fields on every payload so the status bar and Clock app
+    stay synced. The legacy `clock` config key only selects 12h vs 24h now;
+    "off" no longer suppresses time (that left the launcher stuck at --:--)."""
     clock = read_clock_setting()
-    if clock == "off":
-        return
-    tf = 24 if clock == "24" else 12 if clock == "12" else detect_hour_format()
+    if clock == "24":
+        tf = 24
+    elif clock == "12":
+        tf = 12
+    else:
+        tf = detect_hour_format()
     payload["t"] = int(time.time()) + time.localtime().tm_gmtoff
     payload["tf"] = tf
 
@@ -464,7 +475,7 @@ async def poll_api(token: str) -> dict | None:
             "ok": True,
         }
     add_chime_field(payload)   # adds "c":1 iff the config opts in
-    add_clock_fields(payload)   # adds "t" + "tf" iff the config opts in
+    add_clock_fields(payload)   # adds "t" + "tf" on every payload
     return payload
 
 
@@ -595,10 +606,22 @@ class Session:
     def __init__(self, client: BleakClient) -> None:
         self.client = client
         self.refresh_requested = asyncio.Event()
+        self._bridge_queue: asyncio.Queue[dict] = asyncio.Queue()
 
     def _on_refresh(self, _char, _data: bytearray) -> None:
         log("Refresh requested by device")
         self.refresh_requested.set()
+
+    def _on_bridge_cmd(self, _char, data: bytearray) -> None:
+        try:
+            msg = json.loads(bytes(data).decode())
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            log(f"Bridge cmd parse failed: {e}")
+            return
+        try:
+            self._bridge_queue.put_nowait(msg)
+        except asyncio.QueueFull:
+            log("Bridge cmd queue full; dropping")
 
     async def setup_refresh_subscription(self) -> None:
         # start_notify awaits CoreBluetooth's CCCD-write confirmation, which
@@ -617,6 +640,76 @@ class Session:
             log(f"Refresh subscription unavailable: {e}")
         except asyncio.TimeoutError:
             log("Refresh subscription timed out; polling without it")
+
+    async def setup_bridge_subscription(self) -> None:
+        if sys.platform != "darwin":
+            return
+        try:
+            await asyncio.wait_for(
+                self.client.start_notify(DEV_CMD_CHAR_UUID, self._on_bridge_cmd),
+                timeout=10,
+            )
+        except (BleakError, ValueError) as e:
+            log(f"Bridge subscription unavailable: {e}")
+        except asyncio.TimeoutError:
+            log("Bridge subscription timed out")
+
+    async def write_bridge(self, payload: dict) -> bool:
+        data = json.dumps(payload, separators=(",", ":")).encode()
+        if len(data) > 500:
+            log(f"Bridge payload too large ({len(data)} bytes); truncating list")
+            if payload.get("t") == "ss" and isinstance(payload.get("n"), list):
+                payload = dict(payload)
+                payload["n"] = payload["n"][:6]
+                data = json.dumps(payload, separators=(",", ":")).encode()
+        log(f"Bridge -> device: {data.decode()}")
+        try:
+            await self.client.write_gatt_char(HOST_RX_CHAR_UUID, data, response=False)
+            return True
+        except BleakError as e:
+            log(f"Bridge write failed: {e}")
+            return False
+
+    async def drain_bridge(self) -> None:
+        while not self._bridge_queue.empty():
+            msg = await self._bridge_queue.get()
+            await self._handle_bridge(msg)
+
+    async def _handle_bridge(self, msg: dict) -> None:
+        cmd = msg.get("c")
+        if cmd == "ls":
+            seen: set[str] = set()
+            merged = []
+            for cfg in read_config_dirs():
+                for s in list_recent_sessions(limit=20, config_dir=cfg):
+                    if s.session_id in seen:
+                        continue
+                    seen.add(s.session_id)
+                    merged.append(s)
+            merged.sort(key=lambda s: s.mtime, reverse=True)
+            await self.write_bridge(sessions_payload(merged[:10]))
+            return
+        if cmd == "rs":
+            sid = str(msg.get("i") or "")
+            if not sid:
+                await self.write_bridge({"t": "err", "m": "Missing session id"})
+                return
+            cwd = None
+            for cfg in read_config_dirs():
+                cwd = find_session_cwd(sid, config_dir=cfg)
+                if cwd:
+                    break
+            if not cwd:
+                await self.write_bridge({"t": "err", "m": "Session not found"})
+                return
+            if resume_session_mac(sid, cwd):
+                log(f"Resumed Claude session {sid[:8]}… in {cwd}")
+                label = resume_terminal_label(read_resume_terminal_setting())
+                await self.write_bridge({"t": "ok", "m": f"Opening in {label}…"})
+            else:
+                await self.write_bridge({"t": "err", "m": "Could not launch claude"})
+            return
+        log(f"Unknown bridge cmd: {msg!r}")
 
     async def write_payload(self, payload: dict) -> bool:
         data = json.dumps(payload, separators=(",", ":")).encode()
@@ -750,11 +843,13 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
     log("Connected")
     session = Session(client)
     await session.setup_refresh_subscription()
+    await session.setup_bridge_subscription()
 
     last_poll = 0.0
     used_successfully = False
     try:
         while client.is_connected and not stop_event.is_set():
+            await session.drain_bridge()
             now = time.time()
             elapsed = now - last_poll
             if session.refresh_requested.is_set() or elapsed >= POLL_INTERVAL:

@@ -23,3 +23,9 @@ bool clock_src_now(struct tm* out);
 // Formats the current time as "14:05" or "2:05 PM". Writes "--:--" when no
 // time is known, so callers can render unconditionally.
 void clock_src_format(char* buf, size_t len);
+
+// Like clock_src_format but includes seconds. Writes "--:--:--" when unknown.
+void clock_src_format_hms(char* buf, size_t len);
+
+// "Mon, Sep 14" from the synced clock. Writes a waiting hint when unknown.
+void clock_src_format_date(char* buf, size_t len);

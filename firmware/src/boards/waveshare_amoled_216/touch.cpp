@@ -38,29 +38,13 @@ void touch_hal_init(void) {
 // assumed). The rotation compensation is therefore already baked into them.
 #define TOUCH_CAL_QUADRANT 3
 
-// Bring a reported point into LVGL's frame across a rotation.
-//
-// This board can't rotate in hardware (the CO5300's MADCTL only flips axes),
-// so display.cpp rotates pixels on the CPU in rotate_strip(), mapping LVGL
-// (x,y) to panel (px,py). Touch reports its own pre-calibrated frame, so what
-// we owe is the *delta* between the current quadrant and the calibration
-// baseline. Applying rotate_strip()'s absolute inverse instead double-counts
-// the baseline and rotates every tap by 90 degrees -- which is what hardware
-// testing showed: the four launcher tiles resolved in a closed TL->TR->BR->BL
-// cycle, in both orientations.
-//
-// Deriving it: with P the reported point, B the baseline quadrant and q the
-// current one, P = F_B^-1(F_q(L)), so L = F_q^-1(F_B(P)) -- a rotation by
-// (B - q) steps. At q == B that collapses to identity, preserving the
-// known-good behaviour the old tap-anywhere UI depended on.
-//
-// F_k below are rotate_strip()'s forward maps, so the two stay in step:
+// Bring a reported point into LVGL's frame across a rotation. Gravity Ball
+// freezes imu_hal_rotation_quadrant(), so touch and display remain aligned
+// while that app is open.
 //   k=1  90°: (x,y)->(S-1-y, x)
 //   k=2 180°: (x,y)->(S-1-x, S-1-y)
 //   k=3 270°: (x,y)->(y, S-1-x)
 static void rotate_to_lvgl(uint16_t* x, uint16_t* y) {
-    // rotate_strip() assumes a square panel too (it uses LCD_WIDTH for both
-    // axes), which holds for this 480x480 board.
     const uint16_t S  = LCD_WIDTH;
     const uint16_t px = *x;
     const uint16_t py = *y;

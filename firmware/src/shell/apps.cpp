@@ -2,7 +2,7 @@
 
 // Each app defines its own AppDef; this file is the single place that decides
 // which are compiled in and what order they appear on the home screen.
-// Unimplemented ones currently share the placeholder screen in apps/soon.cpp.
+// Placeholders for apps not yet implemented (see apps/<id>/app.cpp when built).
 extern const AppDef app_clawdmeter;
 extern const AppDef app_voice;
 extern const AppDef app_sessions;

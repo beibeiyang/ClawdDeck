@@ -214,7 +214,13 @@ static void check_serial_cmd() {
                 Serial.printf("touchdbg %s\n", touch_debug ? "on" : "off");
             }
             else if (strcmp(cmd_buf, "imu") == 0) {
-                Serial.printf("IMU q=%u\n", imu_hal_rotation_quadrant());
+                float ax = 0.0f, ay = 0.0f, az = 0.0f;
+                if (imu_hal_read_accel(&ax, &ay, &az))
+                    Serial.printf("IMU q=%u ax=%.4f ay=%.4f az=%.4f\n",
+                                  imu_hal_rotation_quadrant(), ax, ay, az);
+                else
+                    Serial.printf("IMU q=%u unavailable\n",
+                                  imu_hal_rotation_quadrant());
             }
             cmd_pos = 0;
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {

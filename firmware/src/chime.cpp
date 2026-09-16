@@ -37,13 +37,18 @@ static void chime_task(void* arg) {
     vTaskDelete(nullptr);
 }
 
+static bool chime_begin_i2s(void) {
+    i2s.setPins(cfg.bclk, cfg.ws, cfg.dout, cfg.din, cfg.mclk);
+    return i2s.begin(I2S_MODE_STD, cfg.sample_rate, I2S_DATA_BIT_WIDTH_16BIT,
+                     I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH);
+}
+
 bool chime_init(const ChimeConfig& c) {
     cfg = c;
     if (cfg.amp_enable) cfg.amp_enable(false);   // amp off until we play
 
     i2s.setPins(cfg.bclk, cfg.ws, cfg.dout, cfg.din, cfg.mclk);
-    if (!i2s.begin(I2S_MODE_STD, cfg.sample_rate, I2S_DATA_BIT_WIDTH_16BIT,
-                   I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH)) {
+    if (!chime_begin_i2s()) {
         Serial.println("chime: I2S init failed");
         return false;
     }
@@ -61,6 +66,16 @@ void chime_play(void) {
     playing = true;
     if (xTaskCreatePinnedToCore(chime_task, "chime", 4096, nullptr, 1, nullptr, 0) != pdPASS)
         playing = false;   // couldn't spawn — stay silent rather than wedge the flag
+}
+
+void chime_suspend(void) {
+    if (!ready) return;
+    i2s.end();
+}
+
+void chime_resume(void) {
+    if (!ready) return;
+    if (!chime_begin_i2s()) Serial.println("chime: I2S resume failed");
 }
 
 void chime_tick(void) {}   // playback runs in chime_task; nothing to poll

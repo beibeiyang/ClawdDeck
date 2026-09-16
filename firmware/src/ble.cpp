@@ -11,6 +11,8 @@
 #define RX_CHAR_UUID        "4c41555a-4465-7669-6365-000000000002"  // host writes here
 #define TX_CHAR_UUID        "4c41555a-4465-7669-6365-000000000003"  // device ack/nack notifies
 #define REQ_CHAR_UUID       "4c41555a-4465-7669-6365-000000000004"  // device-initiated refresh request
+#define HOST_RX_CHAR_UUID   "4c41555a-4465-7669-6365-000000000005"  // host -> device bridge payloads
+#define DEV_CMD_CHAR_UUID   "4c41555a-4465-7669-6365-000000000006"  // device -> host bridge commands
 
 #define BLE_BUF_SIZE 512
 
@@ -61,6 +63,8 @@ static NimBLECharacteristic* input_kbd = nullptr;
 static NimBLECharacteristic* tx_char = nullptr;
 static NimBLECharacteristic* rx_char = nullptr;
 static NimBLECharacteristic* req_char = nullptr;
+static NimBLECharacteristic* host_rx_char = nullptr;
+static NimBLECharacteristic* dev_cmd_char = nullptr;
 
 static ble_state_t state = BLE_STATE_INIT;
 static bool need_advertise = false;
@@ -73,7 +77,9 @@ static volatile uint16_t param_fix_handle = CONN_HANDLE_NONE;  // pending retry
 static volatile uint32_t param_fix_at_ms  = 0;                 // when to send it
 static volatile uint16_t param_fix_spent  = CONN_HANDLE_NONE;  // one per connection
 static char rx_buf[BLE_BUF_SIZE];
+static char bridge_rx_buf[BLE_BUF_SIZE];
 static volatile bool data_ready = false;
+static volatile bool bridge_ready = false;
 static volatile bool has_received_data = false;
 static char mac_str[18];
 
@@ -259,6 +265,21 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 
 };
 
+class HostRxCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* chr, NimBLEConnInfo& info) override {
+        (void)chr;
+        std::string id = info.getIdAddress().toString();
+        if (!info.isEncrypted()) return;
+        if (!owner_set && id != ZERO_ADDR) claim_owner(id);
+        if (owner_set && strcmp(id.c_str(), owner_addr) != 0) return;
+        std::string val = chr->getValue();
+        size_t len = std::min(val.length(), (size_t)(BLE_BUF_SIZE - 1));
+        memcpy(bridge_rx_buf, val.c_str(), len);
+        bridge_rx_buf[len] = '\0';
+        bridge_ready = true;
+    }
+};
+
 class RxCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* chr, NimBLEConnInfo& info) override {
         // Only accept usage data over a bonded+encrypted link, and only from the
@@ -358,6 +379,18 @@ void ble_init(void) {
     static ReqCallbacks reqCb;
     req_char->setCallbacks(&reqCb);
 
+    host_rx_char = svc->createCharacteristic(
+        HOST_RX_CHAR_UUID,
+        NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
+    );
+    static HostRxCallbacks hostRxCb;
+    host_rx_char->setCallbacks(&hostRxCb);
+
+    dev_cmd_char = svc->createCharacteristic(
+        DEV_CMD_CHAR_UUID,
+        NIMBLE_PROPERTY::NOTIFY
+    );
+
     svc->start();
     server->start();
     start_advertising();
@@ -448,6 +481,19 @@ void ble_request_refresh(void) {
         req_char->notify();
         Serial.println("BLE: refresh requested");
     }
+}
+
+void ble_bridge_send_cmd(const char* json) {
+    if (state != BLE_STATE_CONNECTED || !dev_cmd_char || !json) return;
+    dev_cmd_char->setValue(json);
+    dev_cmd_char->notify();
+    Serial.printf("BLE: bridge cmd %s\n", json);
+}
+
+const char* ble_bridge_take_rx(void) {
+    if (!bridge_ready) return nullptr;
+    bridge_ready = false;
+    return bridge_rx_buf;
 }
 
 void ble_keyboard_press(uint8_t key, uint8_t modifier) {

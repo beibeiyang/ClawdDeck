@@ -29,5 +29,10 @@ bool chime_init(const ChimeConfig& cfg);
 // or already playing.
 void chime_play(void);
 
+// Release the I2S peripheral so a board's mic capture path can use the bus.
+// sound_hal_play_reset() resumes automatically via chime_resume().
+void chime_suspend(void);
+void chime_resume(void);
+
 // Currently a no-op (playback runs in its own task); kept for HAL symmetry.
 void chime_tick(void);

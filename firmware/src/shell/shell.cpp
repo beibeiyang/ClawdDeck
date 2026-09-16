@@ -5,6 +5,8 @@
 #include "../theme.h"
 #include "../brightness.h"
 #include "../hal/board_caps.h"
+#include "../ble.h"
+#include "../data.h"
 #include <string.h>
 
 #define MAX_VISIBLE_APPS 24
@@ -20,6 +22,10 @@ static int           visible_n = 0;
 static const AppDef* fg       = nullptr;   // foreground app, NULL at the launcher
 static int           fg_index = -1;
 static const AppDef* creating = nullptr;   // set only during create()
+
+static UsageData  s_last_usage = {};
+static bool       s_have_usage = false;
+static ble_state_t s_last_ble  = BLE_STATE_INIT;
 
 // What this board can actually offer an app. BOARD_HAS_PSRAM is a build flag
 // (not a board.h symbol) so shared code may legitimately test it; everything
@@ -55,6 +61,8 @@ static void build_app(int i) {
     creating = visible[i];
     if (visible[i]->create) visible[i]->create(roots[i]);
     creating = nullptr;
+    if (s_have_usage && visible[i]->on_usage) visible[i]->on_usage(&s_last_usage);
+    if (visible[i]->on_ble) visible[i]->on_ble(s_last_ble);
 }
 
 static void home_pill_cb(lv_event_t* e) {
@@ -223,12 +231,17 @@ bool shell_button(app_btn_t btn) {
 // ---- Host data fan-out: every built app hears about it, foreground or not ----
 
 void shell_set_usage(const UsageData* data) {
+    if (data) {
+        s_last_usage = *data;
+        s_have_usage = true;
+    }
     for (int i = 0; i < visible_n; i++) {
         if (roots[i] && visible[i]->on_usage) visible[i]->on_usage(data);
     }
 }
 
 void shell_set_ble(ble_state_t state) {
+    s_last_ble = state;
     statusbar_set_ble(state);
     for (int i = 0; i < visible_n; i++) {
         if (roots[i] && visible[i]->on_ble) visible[i]->on_ble(state);

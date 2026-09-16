@@ -284,23 +284,20 @@ build_payload_for_token() {
     local now
     now=$(date +%s)
 
-    # Optional clock. When enabled, send a local wall-clock epoch (UTC epoch shifted
-    # by the timezone offset, so gmtime() on-device reads local) plus the hour format.
+    # Optional clock — always sent so the status bar and Clock app stay synced.
     local clock clock_fragment=""
     clock=$(read_clock_setting)
-    if [ "$clock" != "off" ]; then
-        local tz off_sec local_epoch tf
-        tz=$(date +%z)            # e.g. +0200 or -0500
-        off_sec=$(( (10#${tz:1:2} * 3600) + (10#${tz:3:2} * 60) ))
-        [ "${tz:0:1}" = "-" ] && off_sec=$(( -off_sec ))
-        local_epoch=$(( now + off_sec ))
-        case "$clock" in
-            12) tf=12 ;;
-            24) tf=24 ;;
-            *)  tf=$(detect_hour_format) ;;
-        esac
-        clock_fragment=",\"t\":$local_epoch,\"tf\":$tf"
-    fi
+    local tz off_sec local_epoch tf
+    tz=$(date +%z)            # e.g. +0200 or -0500
+    off_sec=$(( (10#${tz:1:2} * 3600) + (10#${tz:3:2} * 60) ))
+    [ "${tz:0:1}" = "-" ] && off_sec=$(( -off_sec ))
+    local_epoch=$(( now + off_sec ))
+    case "$clock" in
+        12) tf=12 ;;
+        24) tf=24 ;;
+        *)  tf=$(detect_hour_format) ;;
+    esac
+    clock_fragment=",\"t\":$local_epoch,\"tf\":$tf"
 
     local headers
     headers=$(curl -s -D - -o /dev/null \

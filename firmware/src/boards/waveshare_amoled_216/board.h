@@ -2,7 +2,7 @@
 
 // Waveshare ESP32-S3-Touch-AMOLED-2.16 — original square AMOLED kit.
 // 480x480 CO5300 + CST9220 touch + AXP2101 PMU + QMI8658 IMU.
-// IMU-driven CPU rotation is enabled.
+// IMU-driven CPU rotation is enabled; apps may temporarily lock it.
 
 #define BOARD_NAME           "Waveshare AMOLED 2.16"
 
@@ -50,6 +50,10 @@
 #define SND_PA_PIN           46     // power-amp enable, HIGH = on
 #define SND_SAMPLE_RATE      44100
 #define SND_ES8311_ADDR      0x18
+
+// ---- Microphone (ES7210 dual-mic ADC, shared I2S bus) ----
+#define MIC_ES7210_ADDR      0x40
+#define MIC_SAMPLE_RATE      16000
 
 // ---- Capability flags (compile-time; redundant with BoardCaps but lets
 // the linker dead-strip whole functions on boards that don't need them) ----

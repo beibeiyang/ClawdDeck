@@ -75,8 +75,45 @@ if [ $? -ne 0 ]; then
 fi
 
 DIMS=$(cat "$TMPDIMS")
-ffmpeg -y -f rawvideo -pixel_format rgb565le -video_size "$DIMS" \
-    -i "$TMPRAW" -update 1 -frames:v 1 "$OUTPUT" 2>/dev/null || true
+if command -v ffmpeg >/dev/null 2>&1 && \
+   ffmpeg -y -f rawvideo -pixel_format rgb565le -video_size "$DIMS" \
+       -i "$TMPRAW" -update 1 -frames:v 1 "$OUTPUT" 2>/dev/null; then
+    :
+else
+    echo "ffmpeg unavailable; using built-in PNG converter..."
+    "$PY" - "$TMPRAW" "$DIMS" "$OUTPUT" << 'PYEOF'
+import struct, sys, zlib
+
+raw_path, dims, output_path = sys.argv[1:]
+width, height = map(int, dims.split("x"))
+raw = open(raw_path, "rb").read()
+if len(raw) != width * height * 2:
+    raise SystemExit(f"Invalid RGB565 frame: got {len(raw)} bytes")
+
+scanlines = bytearray()
+for y in range(height):
+    scanlines.append(0)  # PNG filter: None
+    row = raw[y * width * 2:(y + 1) * width * 2]
+    for lo, hi in zip(row[0::2], row[1::2]):
+        pixel = lo | (hi << 8)
+        scanlines.extend((
+            ((pixel >> 11) & 0x1f) * 255 // 31,
+            ((pixel >> 5) & 0x3f) * 255 // 63,
+            (pixel & 0x1f) * 255 // 31,
+        ))
+
+def chunk(kind, payload):
+    return (struct.pack(">I", len(payload)) + kind + payload +
+            struct.pack(">I", zlib.crc32(kind + payload) & 0xffffffff))
+
+png = (b"\x89PNG\r\n\x1a\n" +
+       chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) +
+       chunk(b"IDAT", zlib.compress(bytes(scanlines), 9)) +
+       chunk(b"IEND", b""))
+with open(output_path, "wb") as output:
+    output.write(png)
+PYEOF
+fi
 
 
 if [ -f "$OUTPUT" ]; then
