@@ -46,7 +46,7 @@ static void set_unpair_text(void) {
     const bool armed = (confirm_at != 0);
     lv_label_set_text(unpair_lbl, armed ? "Tap again to confirm"
                                         : "Clear pairing");
-    lv_obj_set_style_text_color(unpair_lbl, armed ? THEME_RED : THEME_ACCENT, 0);
+    lv_obj_set_style_text_color(unpair_lbl, armed ? THEME_RED : lv_color_hex(0xFF453A), 0);
 }
 
 static void brightness_cb(lv_event_t* e) {
