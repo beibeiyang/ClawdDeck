@@ -170,17 +170,20 @@ static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius, int row) {
     const lv_color_t hue  = lv_color_hex(d->tile_rgb);
     const lv_color_t wall = wall_base_at(row);   // backdrop light behind glass
 
-    // Body — transmission model (critic r2: "tiles must transmit wallpaper
-    // light"): LOW-alpha hue veil over the wallpaper's own color, so the fill
-    // literally contains the backdrop. Top stop = cool-cream wallpaper sheen
-    // through the hue (light entering the slab); bottom = hue-pooled backdrop
-    // (light gathering at the thick base). Opas stay low: the wallpaper's
-    // gradient shows THROUGH the tile.
+    // Body — LIFT model (critic r5: Apple glass brightens what's behind it;
+    // dark-tint-over-backdrop is the 2020-Android tell). The fill is the
+    // wallpaper's own light ADDED-TO: brightened wall (the slab's inner
+    // luminance) with the hue as a color cast, not a darkener. Cap stop =
+    // wall lifted hard toward cream (light entering); pool stop = wall
+    // lifted toward hue (light gathering in color). Opas moderate: bright
+    // color doing the work, not coverage.
     const lv_color_t top_c = lv_color_mix(wall, RIM_CREAM, 40);
-    lv_obj_set_style_bg_color(icon, lv_color_mix(top_c, hue, 165), 0);
-    lv_obj_set_style_bg_opa(icon, 140, 0);
-    lv_obj_set_style_bg_grad_color(icon, lv_color_mix(wall, hue, 125), 0);
-    lv_obj_set_style_bg_grad_opa(icon, 205, 0);
+    lv_obj_set_style_bg_color(icon,
+        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 70), hue, 150), 0);
+    lv_obj_set_style_bg_opa(icon, 145, 0);
+    lv_obj_set_style_bg_grad_color(icon,
+        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 35), hue, 125), 0);
+    lv_obj_set_style_bg_grad_opa(icon, 185, 0);
     lv_obj_set_style_bg_grad_dir(icon, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(icon, 0, 0);
     lv_obj_set_style_bg_grad_stop(icon, 240, 0);
@@ -200,7 +203,7 @@ static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius, int row) {
     // glint the uniform border can't (critic r2).
     lv_obj_set_style_border_color(icon, RIM_CREAM, 0);
     lv_obj_set_style_border_width(icon, 2, 0);
-    lv_obj_set_style_border_opa(icon, 120, 0);
+    lv_obj_set_style_border_opa(icon, 95, 0);
     lv_obj_t* glint = lv_obj_create(icon);
     lv_obj_set_size(glint, lv_obj_get_width(icon) - 24, (lv_obj_get_height(icon) / 2) - 12);
     lv_obj_align(glint, LV_ALIGN_TOP_MID, 0, 8);
