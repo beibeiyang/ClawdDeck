@@ -82,14 +82,17 @@ static lv_obj_t* make_text(lv_obj_t* parent, const char* txt,
 // free; LVGL 9.2 flex + these shapes deadlocked in allocate_item, gdb-proven).
 static lv_obj_t* make_glass_group(lv_obj_t* list, const char** rows, int n,
                                   lv_obj_t** out_vals) {
-    const int line_h = 46;                 // slightly tighter inside groups
+    const int line_h = 50;                 // slightly tighter inside groups
     lv_obj_t* card = lv_obj_create(list);
     lv_obj_set_width(card, lv_pct(100));
-    lv_obj_set_height(card, n * line_h);
+    lv_obj_set_height(card, n * line_h + 6);
+    // Subtle glass (critic r2: the card's bright top plate made line 0 read
+    // as a nested pill inside the card): dimmer, flatter fill — the
+    // hairlines + rim carry the grouping.
     lv_obj_set_style_bg_color(card, SHEEN_TINT, 0);
-    lv_obj_set_style_bg_opa(card, 190, 0);
+    lv_obj_set_style_bg_opa(card, 110, 0);
     lv_obj_set_style_bg_grad_color(card, THEME_BG, 0);
-    lv_obj_set_style_bg_grad_opa(card, 80, 0);
+    lv_obj_set_style_bg_grad_opa(card, 120, 0);
     lv_obj_set_style_bg_grad_dir(card, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(card, 0, 0);
     lv_obj_set_style_bg_grad_stop(card, 255, 0);
@@ -111,14 +114,23 @@ static lv_obj_t* make_glass_group(lv_obj_t* list, const char** rows, int n,
         lv_obj_t* line = lv_obj_create(card);
         lv_obj_set_size(line, lv_pct(100), line_h);
         lv_obj_set_pos(line, 0, i * line_h);
+        // Default-theme border suppression FIRST (the default theme paints
+        // full cream borders on plain lv_obj panels — the "nested pill" the
+        // critic saw), then the designed hairline for lines after the first.
+        lv_obj_set_style_border_width(line, 0, 0);
         lv_obj_set_style_bg_opa(line, LV_OPA_TRANSP, 0);
         lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_clear_flag(line, LV_OBJ_FLAG_CLICKABLE);
         if (i) {   // hairline above lines after line 0
-            lv_obj_set_style_border_color(line, RIM_CREAM, 0);
-            lv_obj_set_style_border_width(line, 1, 0);
-            lv_obj_set_style_border_opa(line, 30, 0);
-            lv_obj_set_style_border_side(line, LV_BORDER_SIDE_TOP, 0);
+            lv_obj_t* strip = lv_obj_create(line);
+            lv_obj_set_size(strip, lv_pct(100), 1);
+            lv_obj_set_pos(strip, 0, 0);
+            lv_obj_set_style_bg_color(strip, RIM_CREAM, 0);
+            lv_obj_set_style_bg_opa(strip, 26, 0);
+            lv_obj_set_style_border_width(strip, 0, 0);
+            lv_obj_set_style_bg_opa(strip, 26, 0);
+            lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_clear_flag(strip, LV_OBJ_FLAG_CLICKABLE);
         }
         const int pad = 16;
         lv_obj_t* name = make_text(line, rows[2 * i], &font_inter_20, LV_OPA_COVER);
@@ -244,7 +256,7 @@ static void settings_create(lv_obj_t* root) {
     lv_obj_set_height(unpair, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_color(unpair, THEME_PANEL, 0);
     lv_obj_set_style_bg_opa(unpair, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(unpair, 12, 0);
+    lv_obj_set_style_radius(unpair, 24, 0);
     lv_obj_set_style_border_width(unpair, 0, 0);
     lv_obj_set_style_pad_hor(unpair, 16, 0);
     lv_obj_set_style_pad_ver(unpair, 14, 0);
