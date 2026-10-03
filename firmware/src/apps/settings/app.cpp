@@ -71,21 +71,75 @@ static void storage_text(char* out, size_t n) {
 }
 static void ram_text(char* out, size_t n) {
 #ifdef BOARD_SIM
-    snprintf(out, n, "31%% · 412KB free");
+    snprintf(out, n, "31%% / 412KB free");
 #else
     const uint32_t total = ESP.getHeapSize();
     const uint32_t free_h = ESP.getFreeHeap();
     const int pct = total ? (int)(((total - free_h) * 100 + total / 2) / total) : 0;
 #ifdef BOARD_HAS_PSRAM
-    snprintf(out, n, "%d%% · %uKB RAM free", pct, (unsigned)(free_h / 1024));
+    snprintf(out, n, "%d%% / %uKB RAM free", pct, (unsigned)(free_h / 1024));
 #else
-    snprintf(out, n, "%d%% · %uKB free", pct, (unsigned)(free_h / 1024));
+    snprintf(out, n, "%d%% / %uKB free", pct, (unsigned)(free_h / 1024));
 #endif
 #endif
 }
 
 // ---- Actions (close background apps / restart / power off) ---------------
-static lv_obj_t* kill_lbl = nullptr;
+// One-shot destructive-ish actions arm on the FIRST tap ("Tap again to
+// confirm", Apple's two-step destructive pattern) and fire on the second
+// tap inside the window; the window times out back to the base label.
+static lv_obj_t*    armed_lbl_[2]  = {nullptr, nullptr};
+static const char*  armed_base_[2] = {nullptr, nullptr};
+static uint32_t     armed_at_[2]   = {0, 0};
+static int          armed_slot     = 0;
+
+static void set_armed_text(void) {
+    for (int i = 0; i < 2; i++) {
+        if (!armed_lbl_[i] || !armed_base_[i]) continue;
+        lv_label_set_text(armed_lbl_[i], armed_at_[i] ? "Tap again to confirm"
+                                                      : armed_base_[i]);
+        lv_obj_set_style_text_color(armed_lbl_[i],
+                                    armed_at_[i] ? THEME_RED : THEME_TEXT, 0);
+    }
+}
+template <typename F>
+static void armed_action(int slot, F fire) {
+    if (armed_at_[slot] == 0) {
+        armed_at_[slot] = lv_tick_get();
+        set_armed_text();
+        return;
+    }
+    if (lv_tick_elaps(armed_at_[slot]) >= CONFIRM_WINDOW_MS) {
+        armed_at_[slot] = lv_tick_get();   // stale press: re-arm
+        set_armed_text();
+        return;
+    }
+    armed_at_[slot] = 0;
+    set_armed_text();
+    fire();   // confirmed — never returns for off/restart
+}
+static void restart_cb(lv_event_t* e) {
+    (void)e;
+    armed_action(0, []() { power_hal_restart(); });
+}
+static void poweroff_cb(lv_event_t* e) {
+    (void)e;
+    armed_action(1, []() { power_hal_power_off(); });
+}
+
+// ---- Actions (close background apps / restart / power off) ---------------
+static lv_obj_t* kill_lbl    = nullptr;
+static lv_obj_t* batt_lbl    = nullptr;
+static int       batt_pct    = -1;
+static bool      batt_chg    = false;
+static void set_battery_text(void) {
+    if (!batt_lbl) return;
+    if (batt_pct < 0) {
+        lv_label_set_text(batt_lbl, "USB / unknown");
+        return;
+    }
+    lv_label_set_text_fmt(batt_lbl, batt_chg ? "%d%% / charging" : "%d%%", batt_pct);
+}
 static void set_kill_text(void) {
     if (!kill_lbl) return;
     const int n = shell_background_count();
@@ -96,14 +150,8 @@ static void kill_cb(lv_event_t* e) {
     shell_kill_background();
     set_kill_text();
 }
-static void restart_cb(lv_event_t* e) {
-    (void)e;
-    power_hal_restart();   // warm reboot; never returns
-}
-static void poweroff_cb(lv_event_t* e) {
-    (void)e;
-    power_hal_power_off(); // rails off (or the platform's nearest); never returns
-}
+
+
 
 static void brightness_cb(lv_event_t* e) {
     (void)e;
@@ -260,7 +308,7 @@ static lv_obj_t* make_row(lv_obj_t* list, const char* label, const char* value,
 // An action row — the glass row card with a centered label (destructive-
 // adjacent actions and one-shot controls use it; the danger color rides the
 // label if set by the caller).
-static void make_row_action(lv_obj_t* list, const char* label, lv_event_cb_t cb) {
+static lv_obj_t* make_row_action(lv_obj_t* list, const char* label, lv_event_cb_t cb) {
     lv_obj_t* row = lv_obj_create(list);
     lv_obj_set_width(row, lv_pct(100));
     lv_obj_set_height(row, LV_SIZE_CONTENT);
@@ -292,6 +340,7 @@ static void make_row_action(lv_obj_t* list, const char* label, lv_event_cb_t cb)
     lv_obj_set_width(l, lv_pct(100));
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(l, LV_ALIGN_CENTER, 0, 0);
+    return l;
 }
 
 static void make_header(lv_obj_t* list, const char* text) {
@@ -396,11 +445,13 @@ static void settings_create(lv_obj_t* root) {
     storage_text(st_txt, sizeof(st_txt));
     char ram_txt[34];
     ram_text(ram_txt, sizeof(ram_txt));
-    static const char* dev_rows[] = {"Storage", "", "Memory", ""};
-    lv_obj_t* dev_vals[2];
-    make_glass_group(list, dev_rows, 2, dev_vals);
+    static const char* dev_rows[] = {"Storage", "", "Memory", "", "Battery", ""};
+    lv_obj_t* dev_vals[3];
+    make_glass_group(list, dev_rows, 3, dev_vals);
     lv_label_set_text(dev_vals[0], st_txt);
     lv_label_set_text(dev_vals[1], ram_txt);
+    batt_lbl = dev_vals[2];
+    set_battery_text();
 
     // ---- Actions: close bg apps, restart, power off -----------------------
     make_header(list, "Actions");
@@ -437,8 +488,14 @@ static void settings_create(lv_obj_t* root) {
     lv_obj_align(kill_lbl, LV_ALIGN_LEFT_MID, 0, 0);
     set_kill_text();
 
-    make_row_action(list, "Restart", restart_cb);
-    make_row_action(list, "Power off", poweroff_cb);
+    // One-shot actions arm on the first tap (two-step destructive pattern —
+    // a stray double-press of Restart/Power off must not brick the session).
+    lv_obj_t* restart_lbl = make_row_action(list, "Restart", restart_cb);
+    armed_lbl_[0]  = restart_lbl;
+    armed_base_[0] = "Restart";
+    lv_obj_t* off_lbl = make_row_action(list, "Power off", poweroff_cb);
+    armed_lbl_[1]  = off_lbl;
+    armed_base_[1] = "Power off";
 
     lv_obj_scroll_to_y(list, 0, LV_ANIM_OFF);
 }
@@ -446,18 +503,45 @@ static void settings_create(lv_obj_t* root) {
 static void settings_destroy(void) {
     // The shell deletes the root, taking the widgets with it; drop the
     // cached pointers so a later tick can't touch freed objects.
-    bright_val = nullptr;
-    bond_val   = nullptr;
-    unpair_lbl = nullptr;
-    kill_lbl   = nullptr;
+    bright_val   = nullptr;
+    bond_val     = nullptr;
+    unpair_lbl   = nullptr;
+    kill_lbl     = nullptr;
+    batt_lbl     = nullptr;
+    armed_lbl_[0] = armed_lbl_[1] = nullptr;
+    armed_base_[0] = armed_base_[1] = nullptr;
+    armed_at_[0] = armed_at_[1] = 0;
     confirm_at = 0;
 }
 
 static void settings_tick(void) {
+    // Live battery row (cheap poll; the label only rewrites on change).
+    const int pct = power_hal_battery_pct();
+    const bool chg = power_hal_is_charging();
+    if (pct != batt_pct || chg != batt_chg) {
+        batt_pct = pct;
+        batt_chg = chg;
+        set_battery_text();
+    }
+    for (int arm = 0; arm < 2; arm++) {
+        const uint32_t armed_at = armed_at_[arm];
+        if (armed_at == 0) continue;
+        if (lv_tick_elaps(armed_at) < CONFIRM_WINDOW_MS) continue;
+        armed_at_[arm] = 0;
+        armed_lbl_[arm] = nullptr;
+        armed_base_[arm] = nullptr;
+        set_armed_text();
+    }
     if (confirm_at == 0) return;
     if (lv_tick_elaps(confirm_at) < CONFIRM_WINDOW_MS) return;
     confirm_at = 0;
     set_unpair_text();
+}
+
+static void settings_on_battery(int percent, bool charging) {
+    batt_pct = percent;
+    batt_chg = charging;
+    set_battery_text();
 }
 
 static void settings_on_ble(ble_state_t state) {
@@ -475,5 +559,5 @@ extern const AppDef app_settings = {
     .persistent = false, .immersive = false,
     .create = settings_create, .destroy = settings_destroy,
     .tick = settings_tick, .on_button = nullptr,
-    .on_usage = nullptr, .on_ble = settings_on_ble, .on_battery = nullptr,
+    .on_usage = nullptr, .on_ble = settings_on_ble, .on_battery = settings_on_battery,
 };

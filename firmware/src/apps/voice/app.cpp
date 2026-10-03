@@ -167,8 +167,10 @@ static void voice_create(lv_obj_t* root) {
     lv_obj_set_style_bg_color(mic_btn,
         lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 170), 0);
     lv_obj_set_style_bg_opa(mic_btn, 170, 0);
+    // r2b nit: the base pool = a flat tail — deepen it into a real pooled
+    // glow (more saturation at the same stop, luma near-equal).
     lv_obj_set_style_bg_grad_color(mic_btn,
-        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 18), hue, 55), 0);
+        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 14), hue, 110), 0);
     lv_obj_set_style_bg_grad_opa(mic_btn, 200, 0);
     lv_obj_set_style_bg_grad_dir(mic_btn, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(mic_btn, 0, 0);
