@@ -10,6 +10,8 @@
 LV_FONT_DECLARE(font_styrene_28);
 LV_FONT_DECLARE(font_styrene_16);
 LV_FONT_DECLARE(font_styrene_14);
+LV_FONT_DECLARE(font_phos_28);
+LV_FONT_DECLARE(font_phos_40);
 
 // Push-to-talk into Claude Code via BLE HID Space. Whisper transcription and
 // WiFi offload to the host bridge are not wired yet — this ships the UX shell
@@ -109,10 +111,10 @@ static void voice_create(lv_obj_t* root) {
     lv_obj_add_event_cb(mic_btn, mic_event, LV_EVENT_ALL, nullptr);
 
     mic_glyph = lv_label_create(mic_btn);
-    lv_label_set_text(mic_glyph, LV_SYMBOL_AUDIO);
+    lv_label_set_text(mic_glyph, PH_MICROPHONE);
     lv_obj_set_style_text_font(mic_glyph,
-                               compact ? &lv_font_montserrat_28
-                                       : &lv_font_montserrat_40, 0);
+                               compact ? &font_phos_28
+                                       : &font_phos_40, 0);
     lv_obj_center(mic_glyph);
 
     state_lbl = lv_label_create(root);
