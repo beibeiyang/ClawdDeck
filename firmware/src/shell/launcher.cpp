@@ -5,6 +5,7 @@
 #include "../hal/board_caps.h"
 #include <stdio.h>
 
+
 LV_FONT_DECLARE(font_inter_28);
 LV_FONT_DECLARE(font_inter_16);
 LV_FONT_DECLARE(font_inter_14);
@@ -100,6 +101,23 @@ static void build_wallpaper(lv_obj_t* parent, int w, int h) {
         { THEME_BG_FLOOR, 235 },  // gently-lifted navy floor (no hard hold)
         { THEME_BG_FLOOR, 255 },  // held to the bottom (battery)
     };
+    // Floor finish: a barely-there upward lift ramp at the very bottom so
+    // the panel ends in FLOW, not a flat black cut (r7 floor complaint).
+    lv_obj_t* floorglow = lv_obj_create(parent);
+    lv_obj_set_size(floorglow, w, h / 6);
+    lv_obj_set_pos(floorglow, 0, h - h / 6);
+    lv_obj_set_style_bg_color(floorglow, lv_color_hex(0x1b1e28), 0);
+    lv_obj_set_style_bg_opa(floorglow, 0, 0);
+    lv_obj_set_style_bg_grad_color(floorglow, lv_color_hex(0x262a36), 0);
+    lv_obj_set_style_bg_grad_opa(floorglow, 60, 0);
+    lv_obj_set_style_bg_grad_dir(floorglow, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_main_stop(floorglow, 0, 0);
+    lv_obj_set_style_bg_grad_stop(floorglow, 255, 0);
+    lv_obj_set_style_border_width(floorglow, 0, 0);
+    lv_obj_set_style_pad_all(floorglow, 0, 0);
+    lv_obj_clear_flag(floorglow, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(floorglow, LV_OBJ_FLAG_CLICKABLE);
+
     lv_obj_t* wp = lv_obj_create(parent);
     lv_obj_set_size(wp, w, h);
     lv_obj_set_pos(wp, 0, 0);
@@ -198,12 +216,16 @@ static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius, int row) {
     // wall lifted hard toward cream (light entering); pool stop = wall
     // lifted toward hue (light gathering in color). Opas moderate: bright
     // color doing the work, not coverage.
+    // Chroma-dominant ramp (r7: luma-only ramps quantize into plateaus on
+    // 16bpp): top = cream-lit, clearly LOWER saturation; pool = saturated hue
+    // at similar luma. The eye reads a smooth HUE flow — the 5-bit luma
+    // quantization rides along inaudibly instead of showing plateaus.
     const lv_color_t top_c = lv_color_mix(wall, RIM_CREAM, 40);
     lv_obj_set_style_bg_color(icon,
-        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 70), hue, 150), 0);
+        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 165), 0);
     lv_obj_set_style_bg_opa(icon, 145, 0);
     lv_obj_set_style_bg_grad_color(icon,
-        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 35), hue, 125), 0);
+        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 12), hue, 82), 0);
     lv_obj_set_style_bg_grad_opa(icon, 185, 0);
     lv_obj_set_style_bg_grad_dir(icon, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(icon, 0, 0);
