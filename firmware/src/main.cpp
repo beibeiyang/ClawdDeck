@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <lvgl.h>
+#include "draw/lv_draw_buf_private.h"
 #include <ArduinoJson.h>
 #include <esp_heap_caps.h>
 
@@ -257,6 +258,42 @@ void setup() {
     const int H = board_caps().height;
 
     lv_init();
+
+    // Draw-buf allocator override (image/snapshot buffers only): the builtin
+    // LVGL pool is sized for objects, not for full-screen snapshot buffers
+    // (a 480x480 RGB565 draw buf = ~460KB — exhausting it trips
+    // LV_ASSERT_MALLOC's wait-for-debugger trap, which reads as a 100% CPU
+    // hang with no diagnostic). Big bufs go to unbounded memory instead:
+    // system heap on sim, PSRAM on hardware. Keeps the small fast pool for
+    // objects/styles/gradients (where TLSF belongs).
+    {
+        static lv_draw_buf_handlers_t img_handlers;
+        lv_draw_buf_handlers_t* def = (lv_draw_buf_handlers_t*)lv_draw_buf_get_image_handlers();
+        img_handlers = *def;
+#ifdef BOARD_SIM
+        img_handlers.buf_malloc_cb = [](size_t size, lv_color_format_t) -> void* {
+            size += LV_DRAW_BUF_ALIGN - 1;
+            return malloc(size);
+        };
+        img_handlers.buf_free_cb = [](void* p) { free(p); };
+#else
+        img_handlers.buf_malloc_cb = [](size_t size, lv_color_format_t) -> void* {
+            size += LV_DRAW_BUF_ALIGN - 1;
+            void* p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+            return p;   // NULL (fallback) handled by callers cleanly
+        };
+        img_handlers.buf_free_cb = [](void* p) { heap_caps_free(p); };
+#endif
+        lv_draw_buf_handlers_init(&img_handlers,
+                                  img_handlers.buf_malloc_cb,
+                                  img_handlers.buf_free_cb,
+                                  img_handlers.buf_copy_cb,
+                                  img_handlers.align_pointer_cb,
+                                  img_handlers.invalidate_cache_cb,
+                                  img_handlers.flush_cache_cb,
+                                  img_handlers.width_to_stride_cb);
+    }
+
     lv_tick_set_cb(my_tick);
 
     buf1 = (uint16_t*)heap_caps_malloc(W * BUF_LINES * 2, LV_BUF_CAPS);
