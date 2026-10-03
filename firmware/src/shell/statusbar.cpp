@@ -105,9 +105,12 @@ void statusbar_init(lv_obj_t* parent) {
     lv_obj_set_style_bg_grad_dir(pill, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(pill, 0, 0);
     lv_obj_set_style_bg_grad_stop(pill, 255, 0);
+    // Asymmetric liquid specular (r8: near-uniform hairline = frosted class;
+    // Apple's pill has a BRIGHTER top rim): border stays warm cream but a
+    // clipped bright top-slab child adds the directional specular segment.
     lv_obj_set_style_border_color(pill, RIM_CREAM, 0);
     lv_obj_set_style_border_width(pill, 2, 0);
-    lv_obj_set_style_border_opa(pill, 170, 0);
+    lv_obj_set_style_border_opa(pill, 150, 0);
     lv_obj_set_style_outline_color(pill, GLASS_SHADOW, 0);
     lv_obj_set_style_outline_width(pill, 1, 0);
     lv_obj_set_style_outline_pad(pill, 0, 0);
@@ -125,7 +128,7 @@ void statusbar_init(lv_obj_t* parent) {
     lv_obj_set_style_bg_grad_color(sheen, RIM_HI, 0);
     lv_obj_set_style_bg_grad_opa(sheen, 0, 0);
     lv_obj_set_style_bg_grad_dir(sheen, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_opa(sheen, 24, 0);
+    lv_obj_set_style_bg_opa(sheen, 52, 0);
     lv_obj_set_style_radius(sheen, pill_h / 2, 0);
     lv_obj_set_style_border_width(sheen, 0, 0);
     lv_obj_set_style_pad_all(sheen, 0, 0);
@@ -133,6 +136,27 @@ void statusbar_init(lv_obj_t* parent) {
     lv_obj_clear_flag(sheen, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(sheen, LV_OBJ_FLAG_IGNORE_LAYOUT);
     lv_obj_set_style_clip_corner(sheen, true, 0);
+
+    // Interior refraction streak (r8 design gap): a soft warm amber pool in
+    // the fill's lower-left, 0-opa fading — reads as light refracted inside
+    // the slab, not a paint stripe.
+    lv_obj_t* pool = lv_obj_create(pill);
+    lv_obj_set_size(pool, (pill_w * 3) / 5, (pill_h * 2) / 3);
+    lv_obj_set_pos(pool, 0, pill_h / 3);
+    lv_obj_set_style_radius(pool, pill_h, 0);
+    lv_obj_set_style_bg_color(pool, lv_color_hex(0xd98e5a), 0);
+    lv_obj_set_style_bg_grad_color(pool, lv_color_hex(0xd98e5a), 0);
+    lv_obj_set_style_bg_opa(pool, 26, 0);
+    lv_obj_set_style_bg_grad_opa(pool, 0, 0);
+    lv_obj_set_style_bg_grad_dir(pool, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_main_stop(pool, 0, 0);
+    lv_obj_set_style_bg_grad_stop(pool, 255, 0);
+    lv_obj_set_style_border_width(pool, 0, 0);
+    lv_obj_set_style_pad_all(pool, 0, 0);
+    lv_obj_clear_flag(pool, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(pool, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(pool, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_set_style_clip_corner(pool, true, 0);
 
     lbl_clock = lv_label_create(bar);
     lv_label_set_text(lbl_clock, "--:--");

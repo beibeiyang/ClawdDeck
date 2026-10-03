@@ -101,23 +101,6 @@ static void build_wallpaper(lv_obj_t* parent, int w, int h) {
         { THEME_BG_FLOOR, 235 },  // gently-lifted navy floor (no hard hold)
         { THEME_BG_FLOOR, 255 },  // held to the bottom (battery)
     };
-    // Floor finish: a barely-there upward lift ramp at the very bottom so
-    // the panel ends in FLOW, not a flat black cut (r7 floor complaint).
-    lv_obj_t* floorglow = lv_obj_create(parent);
-    lv_obj_set_size(floorglow, w, h / 6);
-    lv_obj_set_pos(floorglow, 0, h - h / 6);
-    lv_obj_set_style_bg_color(floorglow, lv_color_hex(0x1b1e28), 0);
-    lv_obj_set_style_bg_opa(floorglow, 0, 0);
-    lv_obj_set_style_bg_grad_color(floorglow, lv_color_hex(0x262a36), 0);
-    lv_obj_set_style_bg_grad_opa(floorglow, 60, 0);
-    lv_obj_set_style_bg_grad_dir(floorglow, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_main_stop(floorglow, 0, 0);
-    lv_obj_set_style_bg_grad_stop(floorglow, 255, 0);
-    lv_obj_set_style_border_width(floorglow, 0, 0);
-    lv_obj_set_style_pad_all(floorglow, 0, 0);
-    lv_obj_clear_flag(floorglow, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(floorglow, LV_OBJ_FLAG_CLICKABLE);
-
     lv_obj_t* wp = lv_obj_create(parent);
     lv_obj_set_size(wp, w, h);
     lv_obj_set_pos(wp, 0, 0);
