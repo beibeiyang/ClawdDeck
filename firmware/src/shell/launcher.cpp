@@ -3,6 +3,7 @@
 #include "statusbar.h"
 #include "../theme.h"
 #include "../hal/board_caps.h"
+#include "draw/snapshot/lv_snapshot.h"
 #include <stdio.h>
 
 
@@ -364,9 +365,34 @@ void launcher_init(lv_obj_t* parent) {
     lv_obj_set_pos(root, 0, 0);
     lv_obj_set_style_border_width(root, 0, 0);
     lv_obj_set_style_pad_all(root, 0, 0);
-    // Wallpaper gradient lives directly on the launcher root; the app host
-    // above it stays opaque dark (apps own their own backdrops).
-    build_wallpaper(root, W, H);
+    // Wallpaper: the full layer stack (duotone + washes + light dome) is
+    // built once into a throwaway container and snapshot-flattened to ONE
+    // opaque RGB565 image (lv_image). A horizontal swipe dirties the whole
+    // grid area every frame — re-blending ~10 gradient layers per strip per
+    // frame was the swipe cost; post-flatten the wall is a single blit.
+    // Verified pixel-identical to the live stack in the sim.
+    lv_obj_t* wall = lv_obj_create(root);
+    lv_obj_set_size(wall, W, H);
+    lv_obj_set_pos(wall, 0, 0);
+    lv_obj_set_style_border_width(wall, 0, 0);
+    lv_obj_set_style_pad_all(wall, 0, 0);
+    lv_obj_clear_flag(wall, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(wall, LV_OBJ_FLAG_CLICKABLE);
+    build_wallpaper(wall, W, H);
+    lv_obj_update_layout(wall);
+    lv_draw_buf_t* wall_flat = lv_snapshot_take(wall, LV_COLOR_FORMAT_RGB565);
+    lv_obj_delete(wall);
+    if (wall_flat) {
+        lv_obj_t* wall_img = lv_image_create(root);
+        lv_image_set_src(wall_img, (const lv_image_dsc_t*)wall_flat);
+        lv_obj_set_pos(wall_img, 0, 0);
+        lv_obj_clear_flag(wall_img, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(wall_img, LV_OBJ_FLAG_CLICKABLE);
+        // wall_flat stays allocated for the launcher's lifetime (PSRAM on
+        // hardware): ~W*H*2 bytes of RAM buys one-op swipes. Lean trade.
+    } else {
+        build_wallpaper(root, W, H);   // snapshot unsupported: keep live stack
+    }
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
     const int n = shell_app_count();
