@@ -118,12 +118,15 @@ static void row_glass(lv_obj_t* row) {
     const lv_color_t hue  = lv_color_hex(0x7256b8);   // Sessions tile cast
     const lv_color_t wall = THEME_BG;                 // backdrop: navy floor
 
+    // Critic r1: pools read painted (saturated purple). Neutralize the cast —
+    // chroma only as a whisper in the pool, so the sheen reads as transmitted
+    // light, not pigment.
     const lv_color_t top_c = lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85),
-                                          hue, 120);
+                                          hue, 55);
     lv_obj_set_style_bg_color(row, top_c, 0);
     lv_obj_set_style_bg_opa(row, 145, 0);
     lv_obj_set_style_bg_grad_color(row,
-        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 12), hue, 60), 0);
+        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 12), hue, 28), 0);
     lv_obj_set_style_bg_grad_opa(row, 185, 0);
     lv_obj_set_style_bg_grad_dir(row, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(row, 0, 0);
@@ -360,8 +363,9 @@ static void sessions_create(lv_obj_t* root) {
 
     // The list — the ONLY scrolling region.
     list_box = lv_obj_create(root);
+    // Critic r1: don't grow the list to pin the status line at the floor —
+    // the footer rides below the content (iOS rhythm) and the dead zone dies.
     lv_obj_set_width(list_box, lv_pct(100));
-    lv_obj_set_flex_grow(list_box, 1);
     lv_obj_set_style_min_height(list_box, compact ? 150 : 200, 0);
     lv_obj_set_style_bg_opa(list_box, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(list_box, 0, 0);
