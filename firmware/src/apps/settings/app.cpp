@@ -136,7 +136,7 @@ static lv_obj_t* make_glass_group(lv_obj_t* list, const char** rows, int n,
         lv_obj_t* name = make_text(line, rows[2 * i], &font_inter_20, LV_OPA_COVER);
         lv_obj_set_style_text_color(name, THEME_TEXT, 0);
         lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
-        lv_obj_t* val = make_text(line, rows[2 * i + 1], &font_inter_20, 170);
+        lv_obj_t* val = make_text(line, rows[2 * i + 1], &font_inter_20, 120);
         lv_obj_set_style_text_color(val, THEME_DIM, 0);
         lv_obj_align(val, LV_ALIGN_RIGHT_MID, 0, 0);
         if (out_vals) out_vals[i] = val;
@@ -258,8 +258,14 @@ static void settings_create(lv_obj_t* root) {
     // glass card; the danger = the red centered label alone.
     lv_obj_set_width(unpair, lv_pct(100));
     lv_obj_set_height(unpair, LV_SIZE_CONTENT);
+    // r5 nit: identical cell tone within the card set.
     lv_obj_set_style_bg_color(unpair, SHEEN_TINT, 0);
-    lv_obj_set_style_bg_opa(unpair, 200, 0);
+    lv_obj_set_style_bg_opa(unpair, 110, 0);
+    lv_obj_set_style_bg_grad_color(unpair, THEME_BG, 0);
+    lv_obj_set_style_bg_grad_opa(unpair, 120, 0);
+    lv_obj_set_style_bg_grad_dir(unpair, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_main_stop(unpair, 0, 0);
+    lv_obj_set_style_bg_grad_stop(unpair, 255, 0);
     lv_obj_set_style_radius(unpair, 16, 0);
     lv_obj_set_style_border_color(unpair, RIM_CREAM, 0);
     lv_obj_set_style_border_width(unpair, 1, 0);
