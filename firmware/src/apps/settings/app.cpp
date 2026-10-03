@@ -136,7 +136,7 @@ static lv_obj_t* make_glass_group(lv_obj_t* list, const char** rows, int n,
         lv_obj_t* name = make_text(line, rows[2 * i], &font_inter_20, LV_OPA_COVER);
         lv_obj_set_style_text_color(name, THEME_TEXT, 0);
         lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
-        lv_obj_t* val = make_text(line, rows[2 * i + 1], &font_inter_16, 200);
+        lv_obj_t* val = make_text(line, rows[2 * i + 1], &font_inter_20, 170);
         lv_obj_set_style_text_color(val, THEME_DIM, 0);
         lv_obj_align(val, LV_ALIGN_RIGHT_MID, 0, 0);
         if (out_vals) out_vals[i] = val;
