@@ -11,6 +11,9 @@
 // Apple-class type stack (Inter, mirroring the shell): titles SemiBold 28,
 // section headers / row titles 20, meta 14. The "·" and "…" glyphs have no
 // codepoints in the converted Inter range (0x20-0x7E) — ASCII separators only.
+LV_FONT_DECLARE(font_inter_16);
+LV_FONT_DECLARE(font_inter_24);
+LV_FONT_DECLARE(font_inter_32);
 LV_FONT_DECLARE(font_inter_28);
 LV_FONT_DECLARE(font_inter_20);
 LV_FONT_DECLARE(font_inter_14);
@@ -181,7 +184,7 @@ static void rebuild_list(void) {
     if (n <= 0) {
         lv_obj_t* empty = lv_label_create(list_box);
         lv_label_set_text(empty, "No recent Claude Code sessions");
-        lv_obj_set_style_text_font(empty, &font_inter_14, 0);
+        lv_obj_set_style_text_font(empty, &font_inter_16, 0);
         lv_obj_set_style_text_color(empty, THEME_DIM, 0);
         lv_label_set_long_mode(empty, LV_LABEL_LONG_WRAP);
         lv_obj_add_flag(empty, LV_OBJ_FLAG_IGNORE_LAYOUT);
@@ -221,14 +224,14 @@ static void rebuild_list(void) {
 
         lv_obj_t* title = lv_label_create(row);
         lv_label_set_text(title, e->title[0] ? e->title : e->id);
-        lv_obj_set_style_text_font(title, &font_inter_20, 0);
+        lv_obj_set_style_text_font(title, &font_inter_24, 0);
         lv_obj_set_style_text_color(title, THEME_TEXT, 0);
         lv_obj_set_width(title, lv_pct(100));
         lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
 
         lv_obj_t* sub = lv_label_create(row);
         lv_label_set_text(sub, e->project[0] ? e->project : "Claude Code");
-        lv_obj_set_style_text_font(sub, &font_inter_14, 0);
+        lv_obj_set_style_text_font(sub, &font_inter_16, 0);
         lv_obj_set_style_text_color(sub, THEME_DIM, 0);
         lv_obj_set_width(sub, lv_pct(100));
         lv_label_set_long_mode(sub, LV_LABEL_LONG_DOT);
@@ -277,7 +280,7 @@ static void sessions_create(lv_obj_t* root) {
     // Nav title.
     lv_obj_t* title = lv_label_create(root);
     lv_label_set_text(title, "Sessions");
-    lv_obj_set_style_text_font(title, &font_inter_28, 0);
+    lv_obj_set_style_text_font(title, &font_inter_32, 0);
     lv_obj_set_style_text_color(title, THEME_TEXT, 0);
 
     // Status row: a small glass pill with a live status dot, usage meta
@@ -343,12 +346,12 @@ static void sessions_create(lv_obj_t* root) {
     lv_obj_clear_flag(chip_dot, LV_OBJ_FLAG_CLICKABLE);
 
     link_lbl = lv_label_create(chip_inner);
-    lv_obj_set_style_text_font(link_lbl, &font_inter_14, 0);
+    lv_obj_set_style_text_font(link_lbl, &font_inter_16, 0);
     lv_obj_set_style_text_color(link_lbl, THEME_TEXT, 0);
     lv_label_set_text(link_lbl, link_text());
 
     usage_lbl = lv_label_create(chip_row);
-    lv_obj_set_style_text_font(usage_lbl, &font_inter_14, 0);
+    lv_obj_set_style_text_font(usage_lbl, &font_inter_16, 0);
     lv_obj_set_style_text_color(usage_lbl, THEME_DIM, 0);
     lv_label_set_long_mode(usage_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_flex_grow(usage_lbl, 1);
@@ -358,7 +361,7 @@ static void sessions_create(lv_obj_t* root) {
     // Section header.
     lv_obj_t* head = lv_label_create(root);
     lv_label_set_text(head, "Recent on Mac");
-    lv_obj_set_style_text_font(head, &font_inter_20, 0);
+    lv_obj_set_style_text_font(head, &font_inter_24, 0);
     lv_obj_set_style_text_color(head, THEME_TEXT, 0);
 
     // The list — the ONLY scrolling region.
@@ -378,7 +381,7 @@ static void sessions_create(lv_obj_t* root) {
 
     // Status line sits under the list, above the home-pill strip.
     status_lbl = lv_label_create(root);
-    lv_obj_set_style_text_font(status_lbl, &font_inter_14, 0);
+    lv_obj_set_style_text_font(status_lbl, &font_inter_16, 0);
     lv_obj_set_style_text_color(status_lbl, THEME_DIM, 0);
     lv_obj_set_width(status_lbl, lv_pct(100));
     lv_label_set_long_mode(status_lbl, LV_LABEL_LONG_WRAP);

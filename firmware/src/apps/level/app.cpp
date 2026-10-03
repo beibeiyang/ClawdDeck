@@ -17,6 +17,8 @@
 // readout below and a "Level!" accent flash when the tilt closes under
 // 0.5 degrees.
 
+LV_FONT_DECLARE(font_inter_16);
+LV_FONT_DECLARE(font_inter_24);
 LV_FONT_DECLARE(font_inter_20);   // degree readout — carries U+00B0 (regen range 0x20-0xB0)
 LV_FONT_DECLARE(font_inter_14);   // axis labels
 
@@ -83,7 +85,7 @@ static lv_obj_t* hairline(lv_obj_t* parent, int len, bool vertical) {
 static lv_obj_t* axis_label(lv_obj_t* parent, const char* txt) {
     lv_obj_t* l = lv_label_create(parent);
     lv_label_set_text(l, txt);
-    lv_obj_set_style_text_font(l, &font_inter_14, 0);
+    lv_obj_set_style_text_font(l, &font_inter_16, 0);
     lv_obj_set_style_text_color(l, THEME_DIM, 0);
     lv_obj_clear_flag(l, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(l, LV_OBJ_FLAG_CLICKABLE);
@@ -363,7 +365,7 @@ static void level_create(lv_obj_t* root) {
     readout = lv_label_create(root);
     lv_obj_set_width(readout, W);           // pin width: no per-tick reflow drift
     lv_label_set_text(readout, readout_buf);
-    lv_obj_set_style_text_font(readout, &font_inter_20, 0);
+    lv_obj_set_style_text_font(readout, &font_inter_24, 0);
     lv_obj_set_style_text_color(readout, THEME_TEXT, 0);
     lv_obj_set_style_text_align(readout, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(readout, LV_LABEL_LONG_WRAP);

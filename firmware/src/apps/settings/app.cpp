@@ -1,11 +1,16 @@
 #include "../../shell/app.h"
+#include "../../shell/shell.h"
 #include "../../shell/statusbar.h"
 #include "../../theme.h"
 #include "../../phosphor_cp.h"
 #include "../../brightness.h"
 #include "../../ble.h"
 #include "../../hal/board_caps.h"
+#include "hal/power_hal.h"
+#include <Arduino.h>
 
+LV_FONT_DECLARE(font_inter_32);
+LV_FONT_DECLARE(font_inter_24);
 LV_FONT_DECLARE(font_inter_20);
 LV_FONT_DECLARE(font_inter_16);
 LV_FONT_DECLARE(font_inter_14);
@@ -49,6 +54,57 @@ static void set_unpair_text(void) {
     lv_obj_set_style_text_color(unpair_lbl, armed ? THEME_RED : lv_color_hex(0xFF453A), 0);
 }
 
+// ---- Device telemetry (real numbers from the runtime) --------------------
+// Hardware: Arduino's ESP object (real sketch/flash + heap numbers). The sim
+// has no ESP32 runtime: display plausible statics so the screen lays out the
+// same way it will on the board.
+static void storage_text(char* out, size_t n) {
+#ifdef BOARD_SIM
+    snprintf(out, n, "18%% of 2048KB");
+#else
+    const uint32_t used = ESP.getSketchSize();
+    const uint32_t free_space = ESP.getFreeSketchSpace();
+    const uint32_t total = used + free_space;
+    const int pct = total ? (int)((used * 100 + total / 2) / total) : 0;
+    snprintf(out, n, "%d%% of %uKB", pct, (unsigned)(total / 1024));
+#endif
+}
+static void ram_text(char* out, size_t n) {
+#ifdef BOARD_SIM
+    snprintf(out, n, "31%% · 412KB free");
+#else
+    const uint32_t total = ESP.getHeapSize();
+    const uint32_t free_h = ESP.getFreeHeap();
+    const int pct = total ? (int)(((total - free_h) * 100 + total / 2) / total) : 0;
+#ifdef BOARD_HAS_PSRAM
+    snprintf(out, n, "%d%% · %uKB RAM free", pct, (unsigned)(free_h / 1024));
+#else
+    snprintf(out, n, "%d%% · %uKB free", pct, (unsigned)(free_h / 1024));
+#endif
+#endif
+}
+
+// ---- Actions (close background apps / restart / power off) ---------------
+static lv_obj_t* kill_lbl = nullptr;
+static void set_kill_text(void) {
+    if (!kill_lbl) return;
+    const int n = shell_background_count();
+    lv_label_set_text_fmt(kill_lbl, "Close background apps (%d)", n);
+}
+static void kill_cb(lv_event_t* e) {
+    (void)e;
+    shell_kill_background();
+    set_kill_text();
+}
+static void restart_cb(lv_event_t* e) {
+    (void)e;
+    power_hal_restart();   // warm reboot; never returns
+}
+static void poweroff_cb(lv_event_t* e) {
+    (void)e;
+    power_hal_power_off(); // rails off (or the platform's nearest); never returns
+}
+
 static void brightness_cb(lv_event_t* e) {
     (void)e;
     brightness_cycle();
@@ -82,7 +138,7 @@ static lv_obj_t* make_text(lv_obj_t* parent, const char* txt,
 // free; LVGL 9.2 flex + these shapes deadlocked in allocate_item, gdb-proven).
 static lv_obj_t* make_glass_group(lv_obj_t* list, const char** rows, int n,
                                   lv_obj_t** out_vals) {
-    const int line_h = 50;                 // slightly tighter inside groups
+    const int line_h = 58;                 // slightly tighter inside groups
     lv_obj_t* card = lv_obj_create(list);
     lv_obj_set_width(card, lv_pct(100));
     lv_obj_set_height(card, n * line_h + 6);
@@ -133,10 +189,10 @@ static lv_obj_t* make_glass_group(lv_obj_t* list, const char** rows, int n,
             lv_obj_clear_flag(strip, LV_OBJ_FLAG_CLICKABLE);
         }
         const int pad = 16;
-        lv_obj_t* name = make_text(line, rows[2 * i], &font_inter_20, LV_OPA_COVER);
+        lv_obj_t* name = make_text(line, rows[2 * i], &font_inter_24, LV_OPA_COVER);
         lv_obj_set_style_text_color(name, THEME_TEXT, 0);
         lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
-        lv_obj_t* val = make_text(line, rows[2 * i + 1], &font_inter_20, 120);
+        lv_obj_t* val = make_text(line, rows[2 * i + 1], &font_inter_24, 120);
         lv_obj_set_style_text_color(val, THEME_DIM, 0);
         lv_obj_align(val, LV_ALIGN_RIGHT_MID, 0, 0);
         if (out_vals) out_vals[i] = val;
@@ -174,7 +230,7 @@ static lv_obj_t* make_row(lv_obj_t* list, const char* label, const char* value,
     lv_obj_set_style_shadow_opa(row, 25, 0);
     lv_obj_set_style_bg_opa(row, 230, LV_STATE_PRESSED);
     lv_obj_set_style_pad_hor(row, 16, 0);
-    lv_obj_set_style_pad_ver(row, 14, 0);
+    lv_obj_set_style_pad_ver(row, 16, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
     if (cb) {
@@ -187,7 +243,7 @@ static lv_obj_t* make_row(lv_obj_t* list, const char* label, const char* value,
 
     lv_obj_t* name = lv_label_create(row);
     lv_label_set_text(name, label);
-    lv_obj_set_style_text_font(name, &font_inter_20, 0);
+    lv_obj_set_style_text_font(name, &font_inter_24, 0);
     lv_obj_set_style_text_color(name, THEME_TEXT, 0);
     lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
 
@@ -195,16 +251,53 @@ static lv_obj_t* make_row(lv_obj_t* list, const char* label, const char* value,
 
     lv_obj_t* val = lv_label_create(row);
     lv_label_set_text(val, value);
-    lv_obj_set_style_text_font(val, &font_inter_16, 0);
+    lv_obj_set_style_text_font(val, &font_inter_24, 0);
     lv_obj_set_style_text_color(val, THEME_DIM, 0);
     lv_obj_align(val, LV_ALIGN_RIGHT_MID, 0, 0);
     return val;
 }
 
+// An action row — the glass row card with a centered label (destructive-
+// adjacent actions and one-shot controls use it; the danger color rides the
+// label if set by the caller).
+static void make_row_action(lv_obj_t* list, const char* label, lv_event_cb_t cb) {
+    lv_obj_t* row = lv_obj_create(list);
+    lv_obj_set_width(row, lv_pct(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(row, SHEEN_TINT, 0);
+    lv_obj_set_style_bg_opa(row, 110, 0);
+    lv_obj_set_style_bg_grad_color(row, THEME_BG, 0);
+    lv_obj_set_style_bg_grad_opa(row, 120, 0);
+    lv_obj_set_style_bg_grad_dir(row, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_main_stop(row, 0, 0);
+    lv_obj_set_style_bg_grad_stop(row, 255, 0);
+    lv_obj_set_style_radius(row, 16, 0);
+    lv_obj_set_style_border_color(row, RIM_CREAM, 0);
+    lv_obj_set_style_border_width(row, 1, 0);
+    lv_obj_set_style_border_opa(row, 120, 0);
+    lv_obj_set_style_shadow_color(row, GLASS_SHADOW, 0);
+    lv_obj_set_style_shadow_width(row, 12, 0);
+    lv_obj_set_style_shadow_ofs_y(row, 4, 0);
+    lv_obj_set_style_shadow_opa(row, 22, 0);
+    lv_obj_set_style_pad_hor(row, 16, 0);
+    lv_obj_set_style_pad_ver(row, 16, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_opa(row, 200, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(row, cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t* l = lv_label_create(row);
+    lv_label_set_text(l, label);
+    lv_obj_set_style_text_font(l, &font_inter_24, 0);
+    lv_obj_set_style_text_color(l, THEME_TEXT, 0);
+    lv_obj_set_width(l, lv_pct(100));
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(l, LV_ALIGN_CENTER, 0, 0);
+}
+
 static void make_header(lv_obj_t* list, const char* text) {
     lv_obj_t* h = lv_label_create(list);
     lv_label_set_text(h, text);
-    lv_obj_set_style_text_font(h, &font_inter_14, 0);
+    lv_obj_set_style_text_font(h, &font_inter_16, 0);
     lv_obj_set_style_text_color(h, THEME_DIM, 0);
     lv_obj_set_style_text_letter_space(h, 2, 0);
     lv_obj_set_style_pad_top(h, 6, 0);
@@ -275,14 +368,14 @@ static void settings_create(lv_obj_t* root) {
     lv_obj_set_style_shadow_ofs_y(unpair, 4, 0);
     lv_obj_set_style_shadow_opa(unpair, 22, 0);
     lv_obj_set_style_pad_hor(unpair, 16, 0);
-    lv_obj_set_style_pad_ver(unpair, 14, 0);
+    lv_obj_set_style_pad_ver(unpair, 16, 0);
     lv_obj_clear_flag(unpair, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(unpair, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_opa(unpair, 230, LV_STATE_PRESSED);
     lv_obj_add_event_cb(unpair, unpair_cb, LV_EVENT_CLICKED, NULL);
 
     unpair_lbl = lv_label_create(unpair);
-    lv_obj_set_style_text_font(unpair_lbl, &font_inter_20, 0);
+    lv_obj_set_style_text_font(unpair_lbl, &font_inter_24, 0);
     lv_obj_set_width(unpair_lbl, lv_pct(100));
     lv_obj_set_style_text_align(unpair_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(unpair_lbl, LV_ALIGN_CENTER, 0, 0);
@@ -296,6 +389,57 @@ static void settings_create(lv_obj_t* root) {
     make_glass_group(list, about_rows, 2, about_vals);
     lv_label_set_text(about_vals[0], c.name);
     lv_label_set_text(about_vals[1], res);
+
+    // ---- Device: the real numbers (flash usage, RAM) ----------------------
+    make_header(list, "Device");
+    char st_txt[34];
+    storage_text(st_txt, sizeof(st_txt));
+    char ram_txt[34];
+    ram_text(ram_txt, sizeof(ram_txt));
+    static const char* dev_rows[] = {"Storage", "", "Memory", ""};
+    lv_obj_t* dev_vals[2];
+    make_glass_group(list, dev_rows, 2, dev_vals);
+    lv_label_set_text(dev_vals[0], st_txt);
+    lv_label_set_text(dev_vals[1], ram_txt);
+
+    // ---- Actions: close bg apps, restart, power off -----------------------
+    make_header(list, "Actions");
+    lv_obj_t* kill_row = lv_obj_create(list);
+    lv_obj_set_width(kill_row, lv_pct(100));
+    lv_obj_set_height(kill_row, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(kill_row, SHEEN_TINT, 0);
+    lv_obj_set_style_bg_opa(kill_row, 170, 0);
+    lv_obj_set_style_bg_grad_color(kill_row, THEME_BG, 0);
+    lv_obj_set_style_bg_grad_opa(kill_row, 95, 0);
+    lv_obj_set_style_bg_grad_dir(kill_row, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_main_stop(kill_row, 0, 0);
+    lv_obj_set_style_bg_grad_stop(kill_row, 255, 0);
+    lv_obj_set_style_radius(kill_row, 16, 0);
+    lv_obj_set_style_border_color(kill_row, RIM_CREAM, 0);
+    lv_obj_set_style_border_width(kill_row, 1, 0);
+    lv_obj_set_style_border_opa(kill_row, 160, 0);
+    lv_obj_set_style_outline_color(kill_row, RIM_DARK, 0);
+    lv_obj_set_style_outline_width(kill_row, 1, 0);
+    lv_obj_set_style_outline_opa(kill_row, 90, 0);
+    lv_obj_set_style_shadow_color(kill_row, GLASS_SHADOW, 0);
+    lv_obj_set_style_shadow_width(kill_row, 14, 0);
+    lv_obj_set_style_shadow_ofs_y(kill_row, 5, 0);
+    lv_obj_set_style_shadow_opa(kill_row, 25, 0);
+    lv_obj_set_style_pad_hor(kill_row, 16, 0);
+    lv_obj_set_style_pad_ver(kill_row, 16, 0);
+    lv_obj_clear_flag(kill_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(kill_row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_opa(kill_row, 230, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(kill_row, kill_cb, LV_EVENT_CLICKED, NULL);
+    kill_lbl = lv_label_create(kill_row);
+    lv_obj_set_style_text_font(kill_lbl, &font_inter_24, 0);
+    lv_obj_set_style_text_color(kill_lbl, THEME_TEXT, 0);
+    lv_obj_align(kill_lbl, LV_ALIGN_LEFT_MID, 0, 0);
+    set_kill_text();
+
+    make_row_action(list, "Restart", restart_cb);
+    make_row_action(list, "Power off", poweroff_cb);
+
     lv_obj_scroll_to_y(list, 0, LV_ANIM_OFF);
 }
 
@@ -305,6 +449,7 @@ static void settings_destroy(void) {
     bright_val = nullptr;
     bond_val   = nullptr;
     unpair_lbl = nullptr;
+    kill_lbl   = nullptr;
     confirm_at = 0;
 }
 

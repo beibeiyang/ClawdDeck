@@ -22,6 +22,12 @@ bool power_hal_pwr_pressed(void);
 // (~1.5s), then clears. Starts the hold-to-pair gesture.
 bool power_hal_pwr_long_pressed(void);
 
+// Explicit power actions (Settings · Actions):
+// power_off = regulated rails off (PMU boards) — the weak default (boards
+// without a PMU) = deep sleep until reset; restart = warm reboot via esp_restart().
+void power_hal_power_off(void);
+void power_hal_restart(void);
+
 // Edge-triggered: true once on the PWR release edge, then clears. Completes
 // or cancels the hold-to-pair gesture.
 bool power_hal_pwr_released(void);

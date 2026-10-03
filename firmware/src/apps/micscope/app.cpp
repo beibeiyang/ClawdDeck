@@ -12,6 +12,8 @@
 #include <esp_heap_caps.h>
 #endif
 
+LV_FONT_DECLARE(font_inter_16);
+LV_FONT_DECLARE(font_inter_32);
 LV_FONT_DECLARE(font_inter_28);
 LV_FONT_DECLARE(font_inter_14);
 
@@ -198,7 +200,7 @@ static void micscope_create(lv_obj_t* root) {
 
     lv_obj_t* title = lv_label_create(root);
     lv_label_set_text(title, "SpecAnalyzer");
-    lv_obj_set_style_text_font(title, &font_inter_28, 0);
+    lv_obj_set_style_text_font(title, &font_inter_32, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(0xf0f4ff), 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, compact ? 36 : 48);
 
@@ -227,7 +229,7 @@ static void micscope_create(lv_obj_t* root) {
     lv_obj_set_style_shadow_opa(canvas, 25, 0);
 
     lv_obj_t* hint = lv_label_create(root);
-    lv_obj_set_style_text_font(hint, &font_inter_14, 0);
+    lv_obj_set_style_text_font(hint, &font_inter_16, 0);
     lv_obj_set_style_text_color(hint, THEME_DIM, 0);
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -(compact ? 28 : 36));
 

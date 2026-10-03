@@ -10,6 +10,13 @@ void shell_tick(void);
 
 // ---- Navigation ----
 void shell_go_home(void);
+// Destroy every built-but-backgrounded app instance (persistent apps that
+// were built at boot and keep running while hidden). Non-foreground only.
+// Returns the number of app instances torn down.
+int shell_kill_background(void);
+// Built-but-backgrounded (persistent) app instances — the "background apps"
+// count the Settings close-row shows.
+int shell_background_count(void);
 void shell_open(int visible_index);
 void shell_open_id(const char* id);
 bool shell_is_home(void);
