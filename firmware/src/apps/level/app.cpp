@@ -1,5 +1,6 @@
 #include "../../shell/app.h"
 #include "../../theme.h"
+#include "../../phosphor_cp.h"
 #include "../../hal/board_caps.h"
 #include "../../hal/imu_hal.h"
 #include <Arduino.h>
@@ -223,8 +224,8 @@ static void level_destroy(void) {
 extern const AppDef app_level = {
     .id            = "level",
     .title         = "Gravity Ball",
-    .glyph         = LV_SYMBOL_GPS,
-    .tile_rgb      = 0x4a5fc1,
+    .glyph         = PH_MAP_PIN,
+    .tile_rgb      = 0x3953c8,
     .blurb         = "A text-free gravity playground for every orientation.",
     .required_caps = APP_CAP_IMU,
     .persistent    = false,

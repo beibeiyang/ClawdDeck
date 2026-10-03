@@ -1,6 +1,7 @@
 #include "../../shell/app.h"
 #include "../../shell/statusbar.h"
 #include "../../theme.h"
+#include "../../phosphor_cp.h"
 #include "../../ble.h"
 #include "../../hal/input_hal.h"
 #include "../../hal/board_caps.h"
@@ -188,8 +189,8 @@ static void voice_tick(void) {
 extern const AppDef app_voice = {
     .id            = "voice",
     .title         = "Voice",
-    .glyph         = LV_SYMBOL_AUDIO,
-    .tile_rgb      = 0x788c5d,
+    .glyph         = PH_WAVEFORM,
+    .tile_rgb      = 0x5f8f46,
     .blurb         = "Hold to talk. Whisper runs on your Mac and the text goes straight into Claude Code.",
     .required_caps = APP_CAP_MIC | APP_CAP_WIFI | APP_CAP_PSRAM,
     .persistent    = false,

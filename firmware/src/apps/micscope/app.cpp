@@ -1,5 +1,6 @@
 #include "../../shell/app.h"
 #include "../../theme.h"
+#include "../../phosphor_cp.h"
 #include "../../hal/board_caps.h"
 #include "../../hal/audio_in_hal.h"
 #include <math.h>
@@ -271,8 +272,8 @@ static void micscope_tick(void) {
 extern const AppDef app_micscope = {
     .id            = "micscope",
     .title         = "SpecAnalyzer",
-    .glyph         = LV_SYMBOL_VOLUME_MAX,
-    .tile_rgb      = 0x7b4bb9,
+    .glyph         = PH_MICROPHONE,
+    .tile_rgb      = 0x8a4bc4,
     .blurb         = "Live audio spectrum — factory SpecAnalyzer demo.",
     .required_caps = APP_CAP_MIC,
     .persistent    = false,

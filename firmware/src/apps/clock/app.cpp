@@ -2,6 +2,7 @@
 #include "../../shell/clock_src.h"
 #include "../../shell/statusbar.h"
 #include "../../theme.h"
+#include "../../phosphor_cp.h"
 #include "../../hal/board_caps.h"
 
 LV_FONT_DECLARE(font_tiempos_56);
@@ -82,8 +83,8 @@ static void clock_destroy(void) {
 extern const AppDef app_clock = {
     .id            = "clock",
     .title         = "Clock",
-    .glyph         = LV_SYMBOL_BELL,
-    .tile_rgb      = 0x2f4858,
+    .glyph         = PH_CLOCK,
+    .tile_rgb      = 0x2b5b6e,
     .blurb         = "Wall clock synced from your Mac while ClawdDeck is paired.",
     .required_caps = APP_CAP_NONE,
     .persistent    = false,

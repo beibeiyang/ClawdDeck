@@ -1,6 +1,7 @@
 #include "../../shell/app.h"
 #include "../../shell/statusbar.h"
 #include "../../theme.h"
+#include "../../phosphor_cp.h"
 #include "../../brightness.h"
 #include "../../ble.h"
 #include "../../hal/board_caps.h"
@@ -198,8 +199,8 @@ static void settings_on_ble(ble_state_t state) {
 // `extern` is required: a file-scope `const` object has internal linkage in
 // C++, so without it the registry in shell/apps.cpp can't see this symbol.
 extern const AppDef app_settings = {
-    .id = "settings", .title = "Settings", .glyph = LV_SYMBOL_SETTINGS,
-    .tile_rgb = 0x3a3a38,
+    .id = "settings", .title = "Settings", .glyph = PH_GEAR,
+    .tile_rgb = 0x3d3d3b,
     .blurb = "Brightness, pairing and board info.",
     .required_caps = APP_CAP_NONE,
     .persistent = false, .immersive = false,

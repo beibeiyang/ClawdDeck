@@ -1,5 +1,6 @@
 #include "../../shell/app.h"
 #include "../../theme.h"
+#include "../../phosphor_cp.h"
 #include "../../ble.h"
 #include "../../host_bridge.h"
 #include "../../hal/board_caps.h"
@@ -251,8 +252,8 @@ static void sessions_on_ble(ble_state_t state) {
 extern const AppDef app_sessions = {
     .id            = "sessions",
     .title         = "Sessions",
-    .glyph         = LV_SYMBOL_LIST,
-    .tile_rgb      = 0x6b5b95,
+    .glyph         = PH_LIST,
+    .tile_rgb      = 0x7256b8,
     .blurb         = "Browse recent Claude Code sessions and resume them on your Mac.",
     .required_caps = APP_CAP_BLE,
     .persistent    = false,

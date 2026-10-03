@@ -1,18 +1,26 @@
 #include "statusbar.h"
+#include "phosphor_cp.h"
 #include "clock_src.h"
 #include "../theme.h"
 #include "../hal/board_caps.h"
 #include <stdio.h>
 #include <string.h>
 
-LV_FONT_DECLARE(font_styrene_20);
+// Apple-grade status type: Inter Medium (SIL OFL; mirrors the old styrene_20)
+LV_FONT_DECLARE(font_inter_20);
 
 // Inset from the panel edge. The 2.16's glass has rounded corners; the rest of
 // the UI clears them with a 20px margin, and the status row sits nearer the
 // curve than anything else does, so it gets a wider one.
 #define SB_PAD_X 34
 
+// Where the glass pill sits: a thin iOS-style lozenge behind the status row,
+// inset a few px from the panel edges so its rim catches light clearly.
+#define SB_PILL_PAD_X   6
+#define SB_PILL_PAD_TOP 3
+
 static lv_obj_t* bar        = nullptr;
+static lv_obj_t* pill       = nullptr;
 static lv_obj_t* lbl_clock  = nullptr;
 static lv_obj_t* lbl_link   = nullptr;   // BLE + WiFi glyphs
 static lv_obj_t* lbl_batt   = nullptr;
@@ -38,8 +46,8 @@ static void refresh_link(void) {
     // vanishing, so the row never reflows as links come and go.
     char buf[24];
     snprintf(buf, sizeof(buf), "%s%s",
-             s_wifi_up ? LV_SYMBOL_WIFI " " : "",
-             s_ble == BLE_STATE_CONNECTED ? LV_SYMBOL_BLUETOOTH : "");
+             s_wifi_up ? PH_WIFI " " : "",
+             s_ble == BLE_STATE_CONNECTED ? PH_BLUETOOTH : "");
     lv_label_set_text(lbl_link, buf);
     lv_obj_set_style_text_color(lbl_link,
         (s_ble == BLE_STATE_CONNECTED || s_wifi_up) ? THEME_TEXT : THEME_DIM, 0);
@@ -48,13 +56,13 @@ static void refresh_link(void) {
 static void refresh_battery(void) {
     if (!lbl_batt) return;
     const char* glyph;
-    if (s_charging)        glyph = LV_SYMBOL_CHARGE;
-    else if (s_batt_pct < 0)  glyph = LV_SYMBOL_BATTERY_EMPTY;
-    else if (s_batt_pct <= 10) glyph = LV_SYMBOL_BATTERY_EMPTY;
-    else if (s_batt_pct <= 35) glyph = LV_SYMBOL_BATTERY_1;
-    else if (s_batt_pct <= 65) glyph = LV_SYMBOL_BATTERY_2;
-    else if (s_batt_pct <= 90) glyph = LV_SYMBOL_BATTERY_3;
-    else                       glyph = LV_SYMBOL_BATTERY_FULL;
+    if (s_charging)            glyph = PH_BATTERY_CHARGE;
+    else if (s_batt_pct < 0)   glyph = PH_BATTERY_EMPTY;
+    else if (s_batt_pct <= 10) glyph = PH_BATTERY_EMPTY;
+    else if (s_batt_pct <= 35) glyph = PH_BATTERY_LOW;
+    else if (s_batt_pct <= 65) glyph = PH_BATTERY_MED;
+    else if (s_batt_pct <= 90) glyph = PH_BATTERY_HIGH;
+    else                       glyph = PH_BATTERY_FULL;
 
     char buf[24];
     if (s_batt_pct >= 0) snprintf(buf, sizeof(buf), "%d%% %s", s_batt_pct, glyph);
@@ -73,21 +81,70 @@ void statusbar_init(lv_obj_t* parent) {
     lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(bar, 0, 0);
     lv_obj_set_style_pad_all(bar, 0, 0);
+    lv_obj_set_style_radius(bar, 0, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
     // The bar is drawn over app content but must never steal touches from it.
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_CLICKABLE);
 
+    // Glass pill behind the status row — the same translucent treatment the
+    // launcher tiles get, scaled to a lozenge: cool light on top fading to a
+    // darker pool, thin bright rim on the edge, no shadow (it hangs in air
+    // against the wallpaper, nothing to ground it onto).
+    pill = lv_obj_create(bar);
+    const int pill_w = W - 2 * SB_PILL_PAD_X;
+    const int pill_h = STATUSBAR_H - 2 * SB_PILL_PAD_TOP;
+    lv_obj_set_size(pill, pill_w, pill_h);
+    lv_obj_set_pos(pill, SB_PILL_PAD_X, SB_PILL_PAD_TOP);
+    lv_obj_set_style_radius(pill, pill_h / 2, 0);
+    lv_obj_set_style_bg_color(pill, SHEEN_TINT, 0);
+    lv_obj_set_style_bg_opa(pill, 175, 0);
+    lv_obj_set_style_bg_grad_color(pill, THEME_BG_BOT, 0);
+    lv_obj_set_style_bg_grad_opa(pill, 190, 0);
+    lv_obj_set_style_bg_grad_dir(pill, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_main_stop(pill, 0, 0);
+    lv_obj_set_style_bg_grad_stop(pill, 255, 0);
+    lv_obj_set_style_border_color(pill, RIM_CREAM, 0);
+    lv_obj_set_style_border_width(pill, 2, 0);
+    lv_obj_set_style_border_opa(pill, 170, 0);
+    lv_obj_set_style_outline_color(pill, GLASS_SHADOW, 0);
+    lv_obj_set_style_outline_width(pill, 1, 0);
+    lv_obj_set_style_outline_pad(pill, 0, 0);
+    lv_obj_set_style_outline_opa(pill, 80, 0);
+    lv_obj_clear_flag(pill, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(pill, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(pill, LV_OBJ_FLAG_IGNORE_LAYOUT);
+
+    // Top sheen on the pill: the same light-wash the tiles wear, shortened so
+    // it stays in the pill's upper half and reads as one material with them.
+    lv_obj_t* sheen = lv_obj_create(pill);
+    lv_obj_set_size(sheen, pill_w, pill_h / 2);
+    lv_obj_set_pos(sheen, 0, 0);
+    lv_obj_set_style_bg_color(sheen, RIM_HI, 0);
+    lv_obj_set_style_bg_grad_color(sheen, RIM_HI, 0);
+    lv_obj_set_style_bg_grad_opa(sheen, 0, 0);
+    lv_obj_set_style_bg_grad_dir(sheen, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_opa(sheen, 34, 0);
+    lv_obj_set_style_radius(sheen, pill_h / 2, 0);
+    lv_obj_set_style_border_width(sheen, 0, 0);
+    lv_obj_set_style_pad_all(sheen, 0, 0);
+    lv_obj_clear_flag(sheen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(sheen, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(sheen, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_set_style_clip_corner(sheen, true, 0);
+
     lbl_clock = lv_label_create(bar);
     lv_label_set_text(lbl_clock, "--:--");
-    lv_obj_set_style_text_font(lbl_clock, &font_styrene_20, 0);
+    lv_obj_set_style_text_font(lbl_clock, &font_inter_20, 0);
     lv_obj_set_style_text_color(lbl_clock, THEME_TEXT, 0);
     lv_obj_align(lbl_clock, LV_ALIGN_LEFT_MID, SB_PAD_X, 0);
 
     lbl_batt = lv_label_create(bar);
+    lv_obj_set_style_text_font(lbl_batt, &font_inter_20, 0);
     lv_obj_set_style_text_color(lbl_batt, THEME_DIM, 0);
     lv_obj_align(lbl_batt, LV_ALIGN_RIGHT_MID, -SB_PAD_X, 0);
 
     lbl_link = lv_label_create(bar);
+    lv_obj_set_style_text_font(lbl_link, &font_inter_20, 0);
     lv_obj_set_style_text_color(lbl_link, THEME_DIM, 0);
     lv_obj_align_to(lbl_link, lbl_batt, LV_ALIGN_OUT_LEFT_MID, -8, 0);
 
