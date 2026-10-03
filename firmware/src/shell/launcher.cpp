@@ -121,6 +121,31 @@ static void build_wallpaper(lv_obj_t* parent, int w, int h) {
     // Directional light bands: two warm VER alpha-ramp slabs, upper-left
     // biased. Stop opas peak ~50 (soft) — large-area, no hard edges, so no
     // banding; low alpha over the taupe reads as the wave crest catching sun.
+    // Backdrop wash strata (r9 decider: compositional richness is the last
+    // in-envelope lever): three broad REGIONAL washes with hue variation —
+    // warm taupe crest (TL), plum mid-field basin (S), cool basin (E).
+    struct { int x, y, w, h; lv_color_t c; int opa; } washes[] = {
+        { 0, 0, (w * 3) / 4, h,      SHEEN_TINT,              50 },  // warm crest
+        { w / 10, 0, w * 9 / 10, h * 3 / 5, lv_color_hex(0x3a2438), 30 },  // plum sweep
+        { w / 2, h / 8, w / 2, h * 7 / 8,  lv_color_hex(0x14203a), 26 },  // cool basin east
+    };
+    for (unsigned i = 0; i < sizeof(washes) / sizeof(washes[0]); i++) {
+        lv_obj_t* band = lv_obj_create(parent);
+        lv_obj_set_size(band, washes[i].w, washes[i].h);
+        lv_obj_set_pos(band, washes[i].x, washes[i].y);
+        lv_obj_set_style_bg_color(band, washes[i].c, 0);
+        lv_obj_set_style_bg_grad_color(band, washes[i].c, 0);
+        lv_obj_set_style_bg_opa(band, washes[i].opa, 0);
+        lv_obj_set_style_bg_grad_opa(band, washes[i].opa / 3, 0);
+        lv_obj_set_style_bg_grad_dir(band, LV_GRAD_DIR_VER, 0);
+        lv_obj_set_style_bg_main_stop(band, 0, 0);
+        lv_obj_set_style_bg_grad_stop(band, 255, 0);
+        lv_obj_set_style_border_width(band, 0, 0);
+        lv_obj_set_style_pad_all(band, 0, 0);
+        lv_obj_set_style_radius(band, 0, 0);
+        lv_obj_clear_flag(band, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(band, LV_OBJ_FLAG_CLICKABLE);
+    }
     struct { int x, w; int peak; int span; int ofs; } bands[] = {
         { 0,            (w * 3) / 4, 50, 200, 0  },  // main crest, top-left
         { (w * 5) / 10, w / 2,       36, 160, 60 },  // secondary, lower-right of crest
@@ -128,9 +153,9 @@ static void build_wallpaper(lv_obj_t* parent, int w, int h) {
     // Form continuation (critic r6: streaks must carry through the glass):
     // two thin elliptical arcs in warm cream, low opa, crossing the tile
     // rows — the tiles' translucent fills show them bending through the slab.
-    struct { int cx, cy, rx, ry, opa; } arcs[] = {
-        { w * 3 / 8, h * 2 / 9,   w / 2 + 80, h / 4, 26 },   // upper sweep grazes row-0 tiles
-        { w + 120,   h * 3 / 4,   w / 2 + 60, h / 3, 18 },   // low sweep enters from off-panel right
+    struct { int cx, cy, rx, ry, opa, bw; } arcs[] = {
+        { w * 3 / 8, h * 2 / 9,   w / 2 + 110, h / 4, 60, 4 },  // HERO sweep: the light source form
+        { w + 120,   h * 3 / 4,   w / 2 + 60,  h / 3, 18, 2 },  // low sweep echoes it
     };
     for (unsigned i = 0; i < sizeof(arcs) / sizeof(arcs[0]); i++) {
         lv_obj_t* line = lv_obj_create(parent);
@@ -138,7 +163,7 @@ static void build_wallpaper(lv_obj_t* parent, int w, int h) {
         lv_obj_set_pos(line, arcs[i].cx - arcs[i].rx, arcs[i].cy - arcs[i].ry);
         lv_obj_set_style_radius(line, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_opa(line, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(line, 2, 0);
+        lv_obj_set_style_border_width(line, arcs[i].bw, 0);
         lv_obj_set_style_border_color(line, RIM_CREAM, 0);
         lv_obj_set_style_border_opa(line, arcs[i].opa, 0);
         lv_obj_set_style_outline_width(line, 0, 0);
