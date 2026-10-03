@@ -67,6 +67,71 @@ static void unpair_cb(lv_event_t* e) {
     set_unpair_text();
 }
 
+static lv_obj_t* make_text(lv_obj_t* parent, const char* txt,
+                           const lv_font_t* font, lv_opa_t opa) {
+    lv_obj_t* l = lv_label_create(parent);
+    lv_label_set_text(l, txt);
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_style_text_opa(l, opa, 0);
+    lv_obj_set_style_pad_all(l, 0, 0);
+    return l;
+}
+
+// A glass GROUP: one card containing n label/value lines at fixed positions,
+// hairline separators between lines (drawn as the line's top border — flex-
+// free; LVGL 9.2 flex + these shapes deadlocked in allocate_item, gdb-proven).
+static lv_obj_t* make_glass_group(lv_obj_t* list, const char** rows, int n,
+                                  lv_obj_t** out_vals) {
+    const int line_h = 46;                 // slightly tighter inside groups
+    lv_obj_t* card = lv_obj_create(list);
+    lv_obj_set_width(card, lv_pct(100));
+    lv_obj_set_height(card, n * line_h);
+    lv_obj_set_style_bg_color(card, SHEEN_TINT, 0);
+    lv_obj_set_style_bg_opa(card, 190, 0);
+    lv_obj_set_style_bg_grad_color(card, THEME_BG, 0);
+    lv_obj_set_style_bg_grad_opa(card, 80, 0);
+    lv_obj_set_style_bg_grad_dir(card, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_main_stop(card, 0, 0);
+    lv_obj_set_style_bg_grad_stop(card, 255, 0);
+    lv_obj_set_style_radius(card, 16, 0);
+    lv_obj_set_style_border_color(card, RIM_CREAM, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_opa(card, 160, 0);
+    lv_obj_set_style_outline_color(card, RIM_DARK, 0);
+    lv_obj_set_style_outline_width(card, 1, 0);
+    lv_obj_set_style_outline_pad(card, 0, 0);
+    lv_obj_set_style_shadow_color(card, GLASS_SHADOW, 0);
+    lv_obj_set_style_shadow_width(card, 14, 0);
+    lv_obj_set_style_shadow_spread(card, 0, 0);
+    lv_obj_set_style_shadow_ofs_y(card, 5, 0);
+    lv_obj_set_style_shadow_opa(card, 25, 0);
+    lv_obj_set_style_pad_hor(card, 16, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < n; i++) {
+        lv_obj_t* line = lv_obj_create(card);
+        lv_obj_set_size(line, lv_pct(100), line_h);
+        lv_obj_set_pos(line, 0, i * line_h);
+        lv_obj_set_style_bg_opa(line, LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(line, LV_OBJ_FLAG_CLICKABLE);
+        if (i) {   // hairline above lines after line 0
+            lv_obj_set_style_border_color(line, RIM_CREAM, 0);
+            lv_obj_set_style_border_width(line, 1, 0);
+            lv_obj_set_style_border_opa(line, 30, 0);
+            lv_obj_set_style_border_side(line, LV_BORDER_SIDE_TOP, 0);
+        }
+        const int pad = 16;
+        lv_obj_t* name = make_text(line, rows[2 * i], &font_inter_20, LV_OPA_COVER);
+        lv_obj_set_style_text_color(name, THEME_TEXT, 0);
+        lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
+        lv_obj_t* val = make_text(line, rows[2 * i + 1], &font_inter_16, 200);
+        lv_obj_set_style_text_color(val, THEME_DIM, 0);
+        lv_obj_align(val, LV_ALIGN_RIGHT_MID, 0, 0);
+        if (out_vals) out_vals[i] = val;
+    }
+    return card;
+}
+
 // One full-width row. Returns the value label so live rows can update it.
 static lv_obj_t* make_row(lv_obj_t* list, const char* label, const char* value,
                           lv_event_cb_t cb) {
@@ -164,9 +229,12 @@ static void settings_create(lv_obj_t* root) {
     set_bright_text();
 
     make_header(list, "Connection");
-    make_row(list, "Name", ble_get_device_name(), nullptr);
-    make_row(list, "Address", ble_get_mac_address(), nullptr);
-    bond_val = make_row(list, "Status", "", nullptr);
+    static const char* conn_rows[] = {"Name", "", "Address", "", "Status", ""};
+    lv_obj_t* conn_vals[3];
+    make_glass_group(list, conn_rows, 3, conn_vals);
+    lv_label_set_text(conn_vals[0], ble_get_device_name());
+    lv_label_set_text(conn_vals[1], ble_get_mac_address());
+    bond_val = conn_vals[2];
     set_bond_text();
 
     // The label is the row's own name, so it's tracked separately to be
@@ -191,13 +259,14 @@ static void settings_create(lv_obj_t* root) {
     set_unpair_text();
 
     make_header(list, "About");
-    make_row(list, "Board", c.name, nullptr);
-
     char res[24];
     snprintf(res, sizeof(res), "%dx%d", c.width, c.height);
-    make_row(list, "Display", res, nullptr);
-
-    make_row(list, "Built", __DATE__, nullptr);
+    static const char* about_rows[] = {"Board", "", "Resolution", ""};
+    lv_obj_t* about_vals[2];
+    make_glass_group(list, about_rows, 2, about_vals);
+    lv_label_set_text(about_vals[0], c.name);
+    lv_label_set_text(about_vals[1], res);
+    lv_obj_scroll_to_y(list, 0, LV_ANIM_OFF);
 }
 
 static void settings_destroy(void) {
