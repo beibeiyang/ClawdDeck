@@ -124,27 +124,32 @@ static void build_wallpaper(lv_obj_t* parent, int w, int h) {
     // Backdrop wash strata (r9 decider: compositional richness is the last
     // in-envelope lever): three broad REGIONAL washes with hue variation —
     // warm taupe crest (TL), plum mid-field basin (S), cool basin (E).
+    // Feathered geography (r10: axis-aligned wash seams read as "drawn
+    // rectangles"): every wash is a full-radius ellipse, oversized so its
+    // rim leaves the panel — geography with no visible boundary lines.
     struct { int x, y, w, h; lv_color_t c; int opa; } washes[] = {
-        { 0, 0, (w * 3) / 4, h,      SHEEN_TINT,              50 },  // warm crest
-        { w / 10, 0, w * 9 / 10, h * 3 / 5, lv_color_hex(0x3a2438), 30 },  // plum sweep
-        { w / 2, h / 8, w / 2, h * 7 / 8,  lv_color_hex(0x14203a), 26 },  // cool basin east
+        { -w / 6, -h / 6, w, h,          SHEEN_TINT,              50 },  // warm crest TL
+        { -w / 8, -h / 16, w, h * 3 / 4, lv_color_hex(0x3a2438),  30 },  // plum sweep
+        { w - w / 4, h / 6, w + w / 3, h, lv_color_hex(0x14203a), 26 },  // cool basin E (runs off-panel)
     };
     for (unsigned i = 0; i < sizeof(washes) / sizeof(washes[0]); i++) {
         lv_obj_t* band = lv_obj_create(parent);
         lv_obj_set_size(band, washes[i].w, washes[i].h);
         lv_obj_set_pos(band, washes[i].x, washes[i].y);
+        lv_obj_set_style_radius(band, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(band, washes[i].c, 0);
         lv_obj_set_style_bg_grad_color(band, washes[i].c, 0);
+        // VER alpha ramp INSIDE the ellipse: strong core, feathered rim.
         lv_obj_set_style_bg_opa(band, washes[i].opa, 0);
-        lv_obj_set_style_bg_grad_opa(band, washes[i].opa / 3, 0);
+        lv_obj_set_style_bg_grad_opa(band, 0, 0);
         lv_obj_set_style_bg_grad_dir(band, LV_GRAD_DIR_VER, 0);
         lv_obj_set_style_bg_main_stop(band, 0, 0);
         lv_obj_set_style_bg_grad_stop(band, 255, 0);
         lv_obj_set_style_border_width(band, 0, 0);
         lv_obj_set_style_pad_all(band, 0, 0);
-        lv_obj_set_style_radius(band, 0, 0);
         lv_obj_clear_flag(band, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_clear_flag(band, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(band, LV_OBJ_FLAG_IGNORE_LAYOUT);
     }
     struct { int x, w; int peak; int span; int ofs; } bands[] = {
         { 0,            (w * 3) / 4, 50, 200, 0  },  // main crest, top-left
@@ -153,24 +158,29 @@ static void build_wallpaper(lv_obj_t* parent, int w, int h) {
     // Form continuation (critic r6: streaks must carry through the glass):
     // two thin elliptical arcs in warm cream, low opa, crossing the tile
     // rows — the tiles' translucent fills show them bending through the slab.
-    struct { int cx, cy, rx, ry, opa, bw; } arcs[] = {
-        { w * 3 / 8, h * 2 / 9,   w / 2 + 110, h / 4, 60, 4 },  // HERO sweep: the light source form
-        { w + 120,   h * 3 / 4,   w / 2 + 60,  h / 3, 18, 2 },  // low sweep echoes it
-    };
-    for (unsigned i = 0; i < sizeof(arcs) / sizeof(arcs[0]); i++) {
-        lv_obj_t* line = lv_obj_create(parent);
-        lv_obj_set_size(line, arcs[i].rx * 2, arcs[i].ry * 2);
-        lv_obj_set_pos(line, arcs[i].cx - arcs[i].rx, arcs[i].cy - arcs[i].ry);
-        lv_obj_set_style_radius(line, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_opa(line, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(line, arcs[i].bw, 0);
-        lv_obj_set_style_border_color(line, RIM_CREAM, 0);
-        lv_obj_set_style_border_opa(line, arcs[i].opa, 0);
-        lv_obj_set_style_outline_width(line, 0, 0);
-        lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_clear_flag(line, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_flag(line, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    }
+    // HERO form (r10: the sweep died mid-panel; a hairline ring reads as a
+    // scratch): one giant cream LIGHT DOME whose top edge is off-panel and
+    // whose lower rim arcs across the upper field — one luminous ridge, no
+    // visible endpoints, glass tiles inherit its light from the fills.
+    lv_obj_t* dome = lv_obj_create(parent);
+    lv_obj_set_size(dome, w + w * 2 / 3, h);
+    lv_obj_set_pos(dome, -w / 4, -h * 5 / 8);
+    lv_obj_set_style_radius(dome, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(dome, SHEEN_TINT, 0);
+    lv_obj_set_style_bg_opa(dome, 34, 0);
+    lv_obj_set_style_bg_grad_color(dome, SHEEN_TINT, 0);
+    lv_obj_set_style_bg_grad_opa(dome, 0, 0);
+    lv_obj_set_style_bg_grad_dir(dome, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_main_stop(dome, 0, 0);
+    lv_obj_set_style_bg_grad_stop(dome, 255, 0);
+    lv_obj_set_style_border_color(dome, RIM_CREAM, 0);
+    lv_obj_set_style_border_width(dome, 3, 0);
+    lv_obj_set_style_border_opa(dome, 55, 0);
+    lv_obj_set_style_border_side(dome, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_outline_width(dome, 0, 0);
+    lv_obj_clear_flag(dome, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(dome, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(dome, LV_OBJ_FLAG_IGNORE_LAYOUT);
     for (unsigned i = 0; i < sizeof(bands) / sizeof(bands[0]); i++) {
         lv_obj_t* band = lv_obj_create(parent);
         lv_obj_set_size(band, bands[i].w, h);
