@@ -217,7 +217,7 @@ static void clock_create(lv_obj_t* root) {
     lv_obj_set_style_text_font(sec_lbl, &font_tiempos_34, 0);
     lv_obj_set_style_text_color(sec_lbl, THEME_INK, 0);
     lv_obj_set_style_text_opa(sec_lbl, 110, 0);
-    lv_obj_align_to(sec_lbl, time_lbl, LV_ALIGN_OUT_RIGHT_MID, 14, -2);
+    lv_obj_align_to(sec_lbl, time_lbl, LV_ALIGN_OUT_RIGHT_MID, 15, 4);
 
     // Date inside the card under the time (Inter, dim).
     date_lbl = lv_label_create(face);
