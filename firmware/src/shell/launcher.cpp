@@ -97,8 +97,8 @@ static void build_wallpaper(lv_obj_t* parent, int w, int h) {
     struct { lv_color_t c; int stop; } stops[] = {
         { THEME_BG_TOP, 0 },      // warm taupe light
         { THEME_BG_MID, 118 },    // plum fall-off (ends ~52% down)
-        { THEME_BG_BOT, 230 },    // navy floor by ~70%
-        { THEME_BG_BOT, 255 },    // held dark to the bottom (battery)
+        { THEME_BG_FLOOR, 235 },  // gently-lifted navy floor (no hard hold)
+        { THEME_BG_FLOOR, 255 },  // held to the bottom (battery)
     };
     lv_obj_t* wp = lv_obj_create(parent);
     lv_obj_set_size(wp, w, h);
@@ -124,6 +124,27 @@ static void build_wallpaper(lv_obj_t* parent, int w, int h) {
         { 0,            (w * 3) / 4, 50, 200, 0  },  // main crest, top-left
         { (w * 5) / 10, w / 2,       36, 160, 60 },  // secondary, lower-right of crest
     };
+    // Form continuation (critic r6: streaks must carry through the glass):
+    // two thin elliptical arcs in warm cream, low opa, crossing the tile
+    // rows — the tiles' translucent fills show them bending through the slab.
+    struct { int cx, cy, rx, ry, opa; } arcs[] = {
+        { w * 3 / 8, h * 2 / 9,   w / 2 + 80, h / 4, 26 },   // upper sweep grazes row-0 tiles
+        { w + 120,   h * 3 / 4,   w / 2 + 60, h / 3, 18 },   // low sweep enters from off-panel right
+    };
+    for (unsigned i = 0; i < sizeof(arcs) / sizeof(arcs[0]); i++) {
+        lv_obj_t* line = lv_obj_create(parent);
+        lv_obj_set_size(line, arcs[i].rx * 2, arcs[i].ry * 2);
+        lv_obj_set_pos(line, arcs[i].cx - arcs[i].rx, arcs[i].cy - arcs[i].ry);
+        lv_obj_set_style_radius(line, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_opa(line, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(line, 2, 0);
+        lv_obj_set_style_border_color(line, RIM_CREAM, 0);
+        lv_obj_set_style_border_opa(line, arcs[i].opa, 0);
+        lv_obj_set_style_outline_width(line, 0, 0);
+        lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(line, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(line, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    }
     for (unsigned i = 0; i < sizeof(bands) / sizeof(bands[0]); i++) {
         lv_obj_t* band = lv_obj_create(parent);
         lv_obj_set_size(band, bands[i].w, h);

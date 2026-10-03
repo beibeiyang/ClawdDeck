@@ -26,6 +26,7 @@
 #define THEME_BG_TOP   lv_color_hex(0x4e3d36)                          // warm taupe light
 #define THEME_BG_MID   lv_color_hex(0x241d24)                          // plum transition
 #define THEME_BG_BOT   lv_color_hex(0x0a0d16)                          // navy floor
+#define THEME_BG_FLOOR lv_color_hex(0x12141c)                          // lifted navy floor (no flat-black letterbox read)
 #define SHEEN_TINT     lv_color_hex(0xe9d8c9)                          // warm cream (wallpaper light through glass)
 //
 // ---- Ink / chrome ----------------------------------------------------------
