@@ -262,15 +262,19 @@ static void level_create(lv_obj_t* root) {
 
     // LIFT fill: the wallpaper's own light added-to. Top stop = wall lifted
     // hard toward cream (sheen), pool stop = wall lifted toward the hue.
+    // Critic r1: dial read flat/murky cold blue. Chroma-dominant fix:
+    // cream-lit top (the tile blue demotes to a cast), pool keeps the
+    // hue story; rim + body carry the material.
     const lv_color_t hue  = lv_color_hex(LEVEL_HUE);
-    const lv_color_t wall = lv_color_mix(THEME_BG_BOT, THEME_BG_TOP, 90);
+    const lv_color_t wall = lv_color_mix(THEME_BG_BOT, THEME_BG_TOP, 140);
     lv_obj_set_style_bg_color(dial,
-        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 165), 0);
-    lv_obj_set_style_bg_opa(dial, 145, 0);
+        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 208), 0);
+    lv_obj_set_style_bg_opa(dial, 165, 0);
     lv_obj_set_style_bg_grad_color(dial,
-        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 12), hue, 82), 0);
-    lv_obj_set_style_bg_grad_opa(dial, 185, 0);
+        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 18), hue, 82), 0);
+    lv_obj_set_style_bg_grad_opa(dial, 200, 0);
     lv_obj_set_style_bg_grad_dir(dial, LV_GRAD_DIR_VER, 0);
+
     lv_obj_set_style_bg_main_stop(dial, 0, 0);
     lv_obj_set_style_bg_grad_stop(dial, 240, 0);
 
@@ -283,8 +287,8 @@ static void level_create(lv_obj_t* root) {
 
     // Cream rim ON the edge + dark outer contour to seat it on the wallpaper.
     lv_obj_set_style_border_color(dial, RIM_CREAM, 0);
-    lv_obj_set_style_border_width(dial, 2, 0);
-    lv_obj_set_style_border_opa(dial, 95, 0);
+    lv_obj_set_style_border_width(dial, 3, 0);
+    lv_obj_set_style_border_opa(dial, 150, 0);
     lv_obj_set_style_outline_color(dial, GLASS_SHADOW, 0);
     lv_obj_set_style_outline_width(dial, 1, 0);
     lv_obj_set_style_outline_pad(dial, 0, 0);

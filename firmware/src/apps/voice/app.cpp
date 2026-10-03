@@ -152,19 +152,22 @@ static void voice_create(lv_obj_t* root) {
     // Backdrop light behind the button — the duotone at mid-screen (the pool
     // stop must pull that light through, exactly like the launcher's
     // wall_base_at()).
-    const lv_color_t wall = lv_color_mix(THEME_BG_FLOOR, THEME_BG_TOP, 80);
+    const lv_color_t wall = lv_color_mix(THEME_BG_FLOOR, THEME_BG_TOP, 60);
 
     // LIFT fill, one VER gradient carrying the whole material (launcher
     // glass_tile numbers): top stop = the sheen (wall lifted hard toward
     // cream, hue as a cast), bottom stop the pool (wall lifted toward hue,
     // near-white kissed in). Brightness beats the backdrop by a wide margin
     // or the glass reads as a hole.
+    // Critic r1: card read flat/murky. Lift hard: cream sheen dominates the
+    // top (green demotes to a cast), pool lifts toward white and keeps the
+    // green story — glass beats the backdrop.
     lv_obj_set_style_bg_color(mic_btn,
-        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 165), 0);
-    lv_obj_set_style_bg_opa(mic_btn, 145, 0);
+        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 45), 0);
+    lv_obj_set_style_bg_opa(mic_btn, 170, 0);
     lv_obj_set_style_bg_grad_color(mic_btn,
-        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 12), hue, 82), 0);
-    lv_obj_set_style_bg_grad_opa(mic_btn, 185, 0);
+        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 18), hue, 55), 0);
+    lv_obj_set_style_bg_grad_opa(mic_btn, 200, 0);
     lv_obj_set_style_bg_grad_dir(mic_btn, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(mic_btn, 0, 0);
     lv_obj_set_style_bg_grad_stop(mic_btn, 240, 0);
@@ -177,8 +180,8 @@ static void voice_create(lv_obj_t* root) {
     lv_obj_set_style_shadow_opa(mic_btn, 25, 0);
     lv_obj_set_style_radius(mic_btn, btn / 2, 0);
     lv_obj_set_style_border_color(mic_btn, RIM_CREAM, 0);
-    lv_obj_set_style_border_width(mic_btn, 2, 0);
-    lv_obj_set_style_border_opa(mic_btn, 95, 0);
+    lv_obj_set_style_border_width(mic_btn, 3, 0);
+    lv_obj_set_style_border_opa(mic_btn, 150, 0);
     lv_obj_set_style_outline_color(mic_btn, GLASS_SHADOW, 0);
     lv_obj_set_style_outline_width(mic_btn, 1, 0);
     lv_obj_set_style_outline_pad(mic_btn, 0, 0);
@@ -199,7 +202,7 @@ static void voice_create(lv_obj_t* root) {
     lv_obj_set_style_border_color(glint, RIM_CREAM, 0);
     lv_obj_set_style_border_width(glint, 3, 0);
     lv_obj_set_style_border_side(glint, LV_BORDER_SIDE_TOP, 0);
-    lv_obj_set_style_border_opa(glint, 85, 0);
+    lv_obj_set_style_border_opa(glint, 120, 0);
     lv_obj_set_style_outline_width(glint, 0, 0);
     lv_obj_set_style_pad_all(glint, 0, 0);
     lv_obj_clear_flag(glint, LV_OBJ_FLAG_SCROLLABLE);
@@ -210,7 +213,7 @@ static void voice_create(lv_obj_t* root) {
     // puddle pools darker. Style states only; no new widgets to clean up.
     lv_obj_set_style_bg_opa(mic_btn, 190, LV_STATE_PRESSED);
     lv_obj_set_style_bg_grad_opa(mic_btn, 210, LV_STATE_PRESSED);
-    lv_obj_set_style_border_opa(mic_btn, 120, LV_STATE_PRESSED);
+    lv_obj_set_style_border_opa(mic_btn, 190, LV_STATE_PRESSED);
     lv_obj_set_style_shadow_opa(mic_btn, 60, LV_STATE_PRESSED);
 
     lv_obj_add_event_cb(mic_btn, mic_event, LV_EVENT_PRESSED, nullptr);
