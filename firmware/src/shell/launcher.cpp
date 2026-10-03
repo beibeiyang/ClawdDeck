@@ -179,8 +179,8 @@ static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius, int row) {
     const lv_color_t top_c = lv_color_mix(wall, RIM_CREAM, 40);
     lv_obj_set_style_bg_color(icon, lv_color_mix(top_c, hue, 165), 0);
     lv_obj_set_style_bg_opa(icon, 140, 0);
-    lv_obj_set_style_bg_grad_color(icon, lv_color_mix(wall, hue, 110), 0);
-    lv_obj_set_style_bg_grad_opa(icon, 150, 0);
+    lv_obj_set_style_bg_grad_color(icon, lv_color_mix(wall, hue, 125), 0);
+    lv_obj_set_style_bg_grad_opa(icon, 205, 0);
     lv_obj_set_style_bg_grad_dir(icon, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(icon, 0, 0);
     lv_obj_set_style_bg_grad_stop(icon, 240, 0);
@@ -200,17 +200,18 @@ static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius, int row) {
     // glint the uniform border can't (critic r2).
     lv_obj_set_style_border_color(icon, RIM_CREAM, 0);
     lv_obj_set_style_border_width(icon, 2, 0);
-    lv_obj_set_style_border_opa(icon, 150, 0);
+    lv_obj_set_style_border_opa(icon, 120, 0);
     lv_obj_t* glint = lv_obj_create(icon);
     lv_obj_set_size(glint, lv_obj_get_width(icon) - 24, (lv_obj_get_height(icon) / 2) - 12);
     lv_obj_align(glint, LV_ALIGN_TOP_MID, 0, 8);
-    lv_obj_set_style_bg_color(glint, RIM_CREAM, 0);
+    lv_obj_set_style_bg_color(glint, lv_color_mix(RIM_CREAM, lv_color_hex(0xfff6ea), 50), 0);
     lv_obj_set_style_bg_grad_color(glint, RIM_CREAM, 0);
     lv_obj_set_style_bg_grad_dir(glint, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_opa(glint, 40, 0);
+    lv_obj_set_style_bg_opa(glint, 78, 0);
     lv_obj_set_style_bg_grad_opa(glint, 0, 0);
     lv_obj_set_style_bg_main_stop(glint, 0, 0);
     lv_obj_set_style_bg_grad_stop(glint, 255, 0);
+    lv_obj_set_size(glint, lv_obj_get_width(icon) - 28, (lv_obj_get_height(icon) * 5) / 8 - 14);
     lv_obj_set_style_radius(glint, (lv_obj_get_height(glint)) / 2, 0);
     lv_obj_set_style_border_width(glint, 0, 0);
     lv_obj_set_style_pad_all(glint, 0, 0);
