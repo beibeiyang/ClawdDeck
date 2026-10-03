@@ -126,9 +126,9 @@ static lv_obj_t* make_glass_group(lv_obj_t* list, const char** rows, int n,
             lv_obj_set_size(strip, lv_pct(100), 1);
             lv_obj_set_pos(strip, 0, 0);
             lv_obj_set_style_bg_color(strip, RIM_CREAM, 0);
-            lv_obj_set_style_bg_opa(strip, 26, 0);
+            lv_obj_set_style_bg_opa(strip, 44, 0);
             lv_obj_set_style_border_width(strip, 0, 0);
-            lv_obj_set_style_bg_opa(strip, 26, 0);
+            lv_obj_set_style_bg_opa(strip, 44, 0);
             lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_clear_flag(strip, LV_OBJ_FLAG_CLICKABLE);
         }
@@ -151,10 +151,12 @@ static lv_obj_t* make_row(lv_obj_t* list, const char* label, const char* value,
     lv_obj_set_width(row, lv_pct(100));
     lv_obj_set_height(row, LV_SIZE_CONTENT);
     // Glass row card — the house recipe (launch-tile material, short form).
+    // Critic r3: standalone value rows read as buttons when the sheen fills
+    // the whole short card — flatten the fill to the group-card level.
     lv_obj_set_style_bg_color(row, SHEEN_TINT, 0);
-    lv_obj_set_style_bg_opa(row, 200, 0);
+    lv_obj_set_style_bg_opa(row, 170, 0);
     lv_obj_set_style_bg_grad_color(row, THEME_BG, 0);
-    lv_obj_set_style_bg_grad_opa(row, 80, 0);
+    lv_obj_set_style_bg_grad_opa(row, 95, 0);
     lv_obj_set_style_bg_grad_dir(row, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(row, 0, 0);
     lv_obj_set_style_bg_grad_stop(row, 255, 0);
@@ -252,22 +254,32 @@ static void settings_create(lv_obj_t* root) {
     // The label is the row's own name, so it's tracked separately to be
     // retitled between "Clear pairing" and the armed confirm prompt.
     lv_obj_t* unpair = lv_obj_create(list);
+    // Critic r3/r4 destructive grammar: a full-opacity, clearly bounded
+    // glass card; the danger = the red centered label alone.
     lv_obj_set_width(unpair, lv_pct(100));
     lv_obj_set_height(unpair, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(unpair, THEME_PANEL, 0);
-    lv_obj_set_style_bg_opa(unpair, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(unpair, 24, 0);
-    lv_obj_set_style_border_width(unpair, 0, 0);
+    lv_obj_set_style_bg_color(unpair, SHEEN_TINT, 0);
+    lv_obj_set_style_bg_opa(unpair, 200, 0);
+    lv_obj_set_style_radius(unpair, 16, 0);
+    lv_obj_set_style_border_color(unpair, RIM_CREAM, 0);
+    lv_obj_set_style_border_width(unpair, 1, 0);
+    lv_obj_set_style_border_opa(unpair, 120, 0);
+    lv_obj_set_style_shadow_color(unpair, GLASS_SHADOW, 0);
+    lv_obj_set_style_shadow_width(unpair, 12, 0);
+    lv_obj_set_style_shadow_ofs_y(unpair, 4, 0);
+    lv_obj_set_style_shadow_opa(unpair, 22, 0);
     lv_obj_set_style_pad_hor(unpair, 16, 0);
     lv_obj_set_style_pad_ver(unpair, 14, 0);
     lv_obj_clear_flag(unpair, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(unpair, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_opa(unpair, LV_OPA_70, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(unpair, 230, LV_STATE_PRESSED);
     lv_obj_add_event_cb(unpair, unpair_cb, LV_EVENT_CLICKED, NULL);
 
     unpair_lbl = lv_label_create(unpair);
     lv_obj_set_style_text_font(unpair_lbl, &font_inter_20, 0);
-    lv_obj_align(unpair_lbl, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_set_width(unpair_lbl, lv_pct(100));
+    lv_obj_set_style_text_align(unpair_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(unpair_lbl, LV_ALIGN_CENTER, 0, 0);
     set_unpair_text();
 
     make_header(list, "About");
