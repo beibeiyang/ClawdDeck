@@ -163,7 +163,7 @@ static void voice_create(lv_obj_t* root) {
     // top (green demotes to a cast), pool lifts toward white and keeps the
     // green story — glass beats the backdrop.
     lv_obj_set_style_bg_color(mic_btn,
-        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 45), 0);
+        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 170), 0);
     lv_obj_set_style_bg_opa(mic_btn, 170, 0);
     lv_obj_set_style_bg_grad_color(mic_btn,
         lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 18), hue, 55), 0);
