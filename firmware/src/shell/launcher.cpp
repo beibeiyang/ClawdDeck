@@ -157,18 +157,30 @@ static void build_wallpaper(lv_obj_t* parent, int w, int h) {
 // The sheen lives in the fill itself (Apple anatomy), not in a child stripe —
 // an alpha-graded white child measured at ~5 luma effective and compositor
 // alpha-gradients banded at pill scale, so the fill does all the work.
-static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius) {
-    const lv_color_t hue = lv_color_hex(d->tile_rgb);
+// wall_base_at(): the wallpaper's own color behind a tile slot. The duotone
+// runs taupe (top stop) -> navy (bottom stop 230/255); a tile's bottom pool
+// must pull THIS light through the glass so the pool matches the backdrop
+// (the critic's core criterion: tint pools match the wallpaper behind them).
+static lv_color_t wall_base_at(int row) {
+    return (row == 0) ? lv_color_mix(THEME_BG_BOT, THEME_BG_TOP, 120)
+                      : lv_color_mix(THEME_BG_BOT, THEME_BG_TOP, 55);
+}
 
-    // Body: base veil + gradient stops. Top is the white-washed sheen stop,
-    // bottom is the hue pool. Attempt 4: richer hue — less white dilution in
-    // the top stop, pool reaches 92% (was 74%) for Apple-grade saturation.
-    const lv_color_t top_c =
-        lv_color_mix(lv_color_mix(SHEEN_TINT, hue, 150), RIM_HI, 44);
-    lv_obj_set_style_bg_color(icon, top_c, 0);
-    lv_obj_set_style_bg_opa(icon, 170, 0);
-    lv_obj_set_style_bg_grad_color(icon, lv_color_mix(SHEEN_TINT, hue, 92), 0);
-    lv_obj_set_style_bg_grad_opa(icon, 190, 0);
+static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius, int row) {
+    const lv_color_t hue  = lv_color_hex(d->tile_rgb);
+    const lv_color_t wall = wall_base_at(row);   // backdrop light behind glass
+
+    // Body — transmission model (critic r2: "tiles must transmit wallpaper
+    // light"): LOW-alpha hue veil over the wallpaper's own color, so the fill
+    // literally contains the backdrop. Top stop = cool-cream wallpaper sheen
+    // through the hue (light entering the slab); bottom = hue-pooled backdrop
+    // (light gathering at the thick base). Opas stay low: the wallpaper's
+    // gradient shows THROUGH the tile.
+    const lv_color_t top_c = lv_color_mix(wall, RIM_CREAM, 40);
+    lv_obj_set_style_bg_color(icon, lv_color_mix(top_c, hue, 165), 0);
+    lv_obj_set_style_bg_opa(icon, 140, 0);
+    lv_obj_set_style_bg_grad_color(icon, lv_color_mix(wall, hue, 110), 0);
+    lv_obj_set_style_bg_grad_opa(icon, 150, 0);
     lv_obj_set_style_bg_grad_dir(icon, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(icon, 0, 0);
     lv_obj_set_style_bg_grad_stop(icon, 240, 0);
@@ -180,12 +192,32 @@ static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius) {
     lv_obj_set_style_shadow_ofs_y(icon, 5, 0);
     lv_obj_set_style_shadow_opa(icon, 25, 0);
 
-    // Rim: warm cream over the light pool (Apple's warm glass edge), all four
-    // sides, radius-matched — then a dark outline just outside to seat the
-    // glass on the wallpaper.
+    // Directional rim (critic r2: uniform outline reads plastic): light comes
+    // from above — cream glint on the TOP arc only, faint warm sides, none at
+    // the base (the shadow side), plus the dark outer contour for seating.
+    // Light comes from above: warm cream rim, but the glint sits on the
+    // top arc — a clipped top-half highlight child gives the directional
+    // glint the uniform border can't (critic r2).
     lv_obj_set_style_border_color(icon, RIM_CREAM, 0);
     lv_obj_set_style_border_width(icon, 2, 0);
-    lv_obj_set_style_border_opa(icon, 200, 0);
+    lv_obj_set_style_border_opa(icon, 150, 0);
+    lv_obj_t* glint = lv_obj_create(icon);
+    lv_obj_set_size(glint, lv_obj_get_width(icon) - 24, (lv_obj_get_height(icon) / 2) - 12);
+    lv_obj_align(glint, LV_ALIGN_TOP_MID, 0, 8);
+    lv_obj_set_style_bg_color(glint, RIM_CREAM, 0);
+    lv_obj_set_style_bg_grad_color(glint, RIM_CREAM, 0);
+    lv_obj_set_style_bg_grad_dir(glint, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_opa(glint, 40, 0);
+    lv_obj_set_style_bg_grad_opa(glint, 0, 0);
+    lv_obj_set_style_bg_main_stop(glint, 0, 0);
+    lv_obj_set_style_bg_grad_stop(glint, 255, 0);
+    lv_obj_set_style_radius(glint, (lv_obj_get_height(glint)) / 2, 0);
+    lv_obj_set_style_border_width(glint, 0, 0);
+    lv_obj_set_style_pad_all(glint, 0, 0);
+    lv_obj_clear_flag(glint, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(glint, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(glint, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_set_style_clip_corner(glint, true, 0);
     lv_obj_set_style_outline_color(icon, GLASS_SHADOW, 0);
     lv_obj_set_style_outline_width(icon, 1, 0);
     lv_obj_set_style_outline_pad(icon, 0, 0);
@@ -193,7 +225,7 @@ static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius) {
 
     // Press feedback: brighten the glass and deepen the puddle — pressed
     // glass feels thicker, not dimmer.
-    lv_obj_set_style_bg_opa(icon, 210, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(icon, 190, LV_STATE_PRESSED);
     lv_obj_set_style_shadow_opa(icon, 60, LV_STATE_PRESSED);
 }
 
@@ -210,7 +242,7 @@ static void make_tile(lv_obj_t* page, int slot, int app_index) {
     lv_obj_t* icon = lv_obj_create(page);
     lv_obj_set_size(icon, G.tile, G.tile);
     lv_obj_set_pos(icon, icon_x, cell_y);
-    glass_tile(icon, d, G.radius);
+    glass_tile(icon, d, G.radius, row);
     lv_obj_set_style_radius(icon, G.radius, 0);
     lv_obj_set_style_pad_all(icon, 0, 0);
     lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);

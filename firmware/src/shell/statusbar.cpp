@@ -96,9 +96,11 @@ void statusbar_init(lv_obj_t* parent) {
     lv_obj_set_size(pill, pill_w, pill_h);
     lv_obj_set_pos(pill, SB_PILL_PAD_X, SB_PILL_PAD_TOP);
     lv_obj_set_style_radius(pill, pill_h / 2, 0);
-    lv_obj_set_style_bg_color(pill, SHEEN_TINT, 0);
-    lv_obj_set_style_bg_opa(pill, 175, 0);
-    lv_obj_set_style_bg_grad_color(pill, THEME_BG_BOT, 0);
+    // Transmission recipe (critic r2): cream @low-opa over the wallpaper's
+    // own color so the backlight shows through (was solid cream @175).
+    lv_obj_set_style_bg_color(pill, lv_color_mix(THEME_BG_TOP, SHEEN_TINT, 40), 0);
+    lv_obj_set_style_bg_opa(pill, 130, 0);
+    lv_obj_set_style_bg_grad_color(pill, lv_color_mix(THEME_BG_BOT, SHEEN_TINT, 60), 0);
     lv_obj_set_style_bg_grad_opa(pill, 190, 0);
     lv_obj_set_style_bg_grad_dir(pill, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(pill, 0, 0);
@@ -123,7 +125,7 @@ void statusbar_init(lv_obj_t* parent) {
     lv_obj_set_style_bg_grad_color(sheen, RIM_HI, 0);
     lv_obj_set_style_bg_grad_opa(sheen, 0, 0);
     lv_obj_set_style_bg_grad_dir(sheen, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_opa(sheen, 34, 0);
+    lv_obj_set_style_bg_opa(sheen, 24, 0);
     lv_obj_set_style_radius(sheen, pill_h / 2, 0);
     lv_obj_set_style_border_width(sheen, 0, 0);
     lv_obj_set_style_pad_all(sheen, 0, 0);
