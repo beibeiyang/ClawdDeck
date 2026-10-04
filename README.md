@@ -10,7 +10,9 @@ ClawdDeck grew out of **Clawdmeter** — the Claude Code usage meter that is
 still the heart of the deck (its meter app is the launcher's first tile).
 ClawdDeck = Clawdmeter + the phone-style launcher it deserved.
 
-|  Home (Liquid-Glass launcher)  |  On hardware  |
+<a href="https://buymeacoffee.com/growingcatb"><img src="assets/readme/bmc-button.png" width="190" alt="Buy Me A Coffee"></a>
+
+|  Home launcher  |  On hardware  |
 | :---: | :---: |
 | ![Home](screenshots/readme/home.png) | ![Hardware](screenshots/readme/home-hw.png) |
 
@@ -18,8 +20,11 @@ ClawdDeck = Clawdmeter + the phone-style launcher it deserved.
 
 480×480 square AMOLED, LVGL 9, 16bpp — no GPU, no blur, everything drawn.
 Every screen went through the same gauntlet: build → verify against real
-Apple reference imagery → independent blind critic → iterate until the
-critic takes the candidate over the reference.
+reference imagery → independent blind critic → iterate until the
+critic takes the candidate over the reference. The launcher now runs the
+factory-desktop look: a full-bleed photo wallpaper, opaque iOS-class app
+icons with white filled glyphs, ghost-shadowed labels, and a bare white
+status row.
 
 |  |  |  |  |
 | :---: | :---: | :---: | :---: |
@@ -336,6 +341,8 @@ sim`, then `cd firmware && .pio/build/sim/program`). See
 
 ## Credits
 
+- **Tip jar** — if ClawdDeck makes your desk happier:
+  [buymeacoffee.com/growingcatb](https://buymeacoffee.com/growingcatb) ☕
 - **Clawdmeter** — ClawdDeck is a fork of
   [HermannBjorgvin/Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter)
   by Hermann Björgvin Haraldsson. The usage-meter concept, the BLE protocol,

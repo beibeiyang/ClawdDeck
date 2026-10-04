@@ -14,15 +14,13 @@ LV_FONT_DECLARE(font_inter_20);
 // curve than anything else does, so it gets a wider one.
 #define SB_PAD_X 34
 
-// Where the glass pill sits: a thin iOS-style lozenge behind the status row,
-// inset a few px from the panel edges so its rim catches light clearly.
+
 // The panel's physical rounded corners cut any content near the top corners;
-// the pill is inset far enough that its rim clears the curve entirely.
+// the status text insets clear the curve entirely.
 #define SB_PILL_PAD_X   10
 #define SB_PILL_PAD_TOP 3
 
 static lv_obj_t* bar        = nullptr;
-static lv_obj_t* pill       = nullptr;
 static lv_obj_t* lbl_clock  = nullptr;
 static lv_obj_t* lbl_link_gh = nullptr;   // the ghost shadows (the legibility)
 static lv_obj_t* lbl_batt_gh = nullptr;
@@ -100,81 +98,10 @@ void statusbar_init(lv_obj_t* parent) {
     // The bar is drawn over app content but must never steal touches from it.
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_CLICKABLE);
 
-    // Glass pill behind the status row — the same translucent treatment the
-    // launcher tiles get, scaled to a lozenge: cool light on top fading to a
-    // darker pool, thin bright rim on the edge, no shadow (it hangs in air
-    // against the wallpaper, nothing to ground it onto).
-    pill = lv_obj_create(bar);
-    const int pill_w = W - 2 * SB_PILL_PAD_X;
-    const int pill_h = STATUSBAR_H - 2 * SB_PILL_PAD_TOP;
-    lv_obj_set_size(pill, pill_w, pill_h);
-    lv_obj_set_pos(pill, SB_PILL_PAD_X, SB_PILL_PAD_TOP);
-    lv_obj_set_style_radius(pill, pill_h / 2, 0);
-    // Transmission recipe (critic r2): cream @low-opa over the wallpaper's
-    // own color so the backlight shows through (was solid cream @175).
-    // Photo-wall backdrop: the pill needs real opacity to read (the glass
-    // 130 was tuned for the dark duotone; over a photo it turned mushy).
-    // iOS-home status treatment: a deep neutral scrim, near-opaque.
-    lv_obj_set_style_bg_color(pill, lv_color_mix(THEME_BG_BOT, lv_color_hex(0x000000), 55), 0);
-    lv_obj_set_style_bg_opa(pill, 215, 0);
-    lv_obj_set_style_bg_grad_color(pill, lv_color_mix(THEME_BG_BOT, lv_color_hex(0x000000), 25), 0);
-    lv_obj_set_style_bg_grad_opa(pill, 235, 0);
-    lv_obj_set_style_bg_grad_dir(pill, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_main_stop(pill, 0, 0);
-    lv_obj_set_style_bg_grad_stop(pill, 255, 0);
-    // Asymmetric liquid specular (r8: near-uniform hairline = frosted class;
-    // Apple's pill has a BRIGHTER top rim): border stays warm cream but a
-    // clipped bright top-slab child adds the directional specular segment.
-    lv_obj_set_style_border_color(pill, RIM_CREAM, 0);
-    lv_obj_set_style_border_width(pill, 2, 0);
-    lv_obj_set_style_border_opa(pill, 150, 0);
-    lv_obj_set_style_outline_color(pill, GLASS_SHADOW, 0);
-    lv_obj_set_style_outline_width(pill, 1, 0);
-    lv_obj_set_style_outline_pad(pill, 0, 0);
-    lv_obj_set_style_outline_opa(pill, 80, 0);
-    lv_obj_clear_flag(pill, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(pill, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(pill, LV_OBJ_FLAG_IGNORE_LAYOUT);
-
-    // Top sheen on the pill: the same light-wash the tiles wear, shortened so
-    // it stays in the pill's upper half and reads as one material with them.
-    lv_obj_t* sheen = lv_obj_create(pill);
-    lv_obj_set_size(sheen, pill_w, pill_h / 2);
-    lv_obj_set_pos(sheen, 0, 0);
-    lv_obj_set_style_bg_color(sheen, RIM_HI, 0);
-    lv_obj_set_style_bg_grad_color(sheen, RIM_HI, 0);
-    lv_obj_set_style_bg_grad_opa(sheen, 0, 0);
-    lv_obj_set_style_bg_grad_dir(sheen, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_opa(sheen, 52, 0);
-    lv_obj_set_style_radius(sheen, pill_h / 2, 0);
-    lv_obj_set_style_border_width(sheen, 0, 0);
-    lv_obj_set_style_pad_all(sheen, 0, 0);
-    lv_obj_clear_flag(sheen, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(sheen, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(sheen, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_set_style_clip_corner(sheen, true, 0);
-
-    // Interior refraction streak (r8 design gap): a soft warm amber pool in
-    // the fill's lower-left, 0-opa fading — reads as light refracted inside
-    // the slab, not a paint stripe.
-    lv_obj_t* pool = lv_obj_create(pill);
-    lv_obj_set_size(pool, (pill_w * 3) / 5, (pill_h * 2) / 3);
-    lv_obj_set_pos(pool, 0, pill_h / 3);
-    lv_obj_set_style_radius(pool, pill_h, 0);
-    lv_obj_set_style_bg_color(pool, lv_color_hex(0xd98e5a), 0);
-    lv_obj_set_style_bg_grad_color(pool, lv_color_hex(0xd98e5a), 0);
-    lv_obj_set_style_bg_opa(pool, 26, 0);
-    lv_obj_set_style_bg_grad_opa(pool, 0, 0);
-    lv_obj_set_style_bg_grad_dir(pool, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_main_stop(pool, 0, 0);
-    lv_obj_set_style_bg_grad_stop(pool, 255, 0);
-    lv_obj_set_style_border_width(pool, 0, 0);
-    lv_obj_set_style_pad_all(pool, 0, 0);
-    lv_obj_clear_flag(pool, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(pool, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(pool, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_set_style_clip_corner(pool, true, 0);
-
+    // The reference desktop carries NO box behind the status row: white
+    // text + glyphs directly over the wallpaper, legibility via a 2px dark
+    // ghost under each item (the iOS/factory anatomy). The old glass pill
+    // smeared over the photo — cut entirely per user call.
     lbl_clock = lv_label_create(bar);
     lv_label_set_text(lbl_clock, "--:--");
     lv_obj_set_style_text_font(lbl_clock, &font_inter_20, 0);

@@ -301,132 +301,9 @@ static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius, int row) {
     lv_obj_add_flag(light, LV_OBJ_FLAG_IGNORE_LAYOUT);
 }
 
-// ---- Tile bake -------------------------------------------------------------
-// A swipe dirties the full grid strip every frame and LVGL re-renders every
-// live glass tile in it — gradient fill + rim + outline + glint clip + soft
-// shadow + label — per strip per frame (the sim bench measured ~4ms/frame on
-// a 3-4GHz desktop; at ESP32-S3 scale that is single-digit FPS = the reported
-// choppiness). The factory Waveshare UI slides pre-made bitmaps instead.
-//
-// So: bake each tile ONCE at init — composite (wallpaper behind + shadow +
-// glass + rim + glint + glyph) into an opaque RGB565 draw_buf via
-// lv_snapshot_take, then replace the live tile body with that image. The
-// object keeps functioning as the click target; pressed state = a second
-// baked image swapped on the PRESSED/RELEASED events. Swipes then blit one
-// wall image + N tile images per strip — bitmap-class cost.
-static constexpr int BAKE_MARGIN = 20;   // covers shadow (ofs 5 + width 14) + outline 1
-
-static lv_draw_buf_t* wall_flat = nullptr;   // the flattened duotone (when the stack path ran)
-static bool wall_is_photo() { return wall_flat == nullptr; }   // covers shadow (ofs 5 + width 14) + outline 1
-
-// Build the live-glass tile into 'parent' at (0,0) — the exact glass_tile
-// recipe, used once per tile inside the bake scratch.
-static void build_tile_glass(lv_obj_t* tile, const AppDef* d, int row, bool pressed);
-
-// Local average of the compiled photo wallpaper behind a screen rect — the
-// bake's "what the glass actually sits over" color, used to key the lift so
-// the tile reads as glass on THIS photo (not on the old duotone's tones).
-// the lift key = set by the caller (the local photo average, or the duotone
-// tone in the fallback path).
-static lv_color_t g_lift_key;
-
-static lv_color_t photo_avg_at(int x, int y, int w, int h) {
-    extern const lv_image_dsc_t img_wall_photo;
-    const uint8_t* p = (const uint8_t*)img_wall_photo.data;
-    const int W = img_wall_photo.header.w, H = img_wall_photo.header.h;
-    uint32_t ar = 0, ag = 0, ab = 0; uint32_t n = 0;
-    for (int yy = y; yy < y + h; yy += 4) {
-        for (int xx = x; xx < x + w; xx += 4) {
-            if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
-            const uint16_t v = (uint16_t)(p[2 * (yy * W + xx)] | (p[2 * (yy * W + xx) + 1] << 8));
-            const int r5 = (v >> 11) & 31, g6 = (v >> 5) & 63, b5 = v & 31;
-            ar += (r5 * 255 + 15) / 31; ag += (g6 * 255 + 31) / 63; ab += (b5 * 255 + 15) / 31;
-            n++;
-        }
-    }
-    if (!n) return wall_base_at(0);
-    return lv_color_make((uint8_t)(ar / n), (uint8_t)(ag / n), (uint8_t)(ab / n));
-}
-
-static lv_draw_buf_t* bake_tile(lv_obj_t* scratch_root, const AppDef* d,
-                                int icon_x, int cell_y, int tile, int radius,
-                                int row, bool pressed) {
-    // scratch = (tile + 2*margin)² backdrop: the flattened wall positioned so
-    // the slot's exact wallpaper pixels sit behind the glass.
-    static bool wall_missing_warned = false;
-    lv_obj_t* area = lv_obj_create(scratch_root);
-    lv_obj_set_size(area, tile + 2 * BAKE_MARGIN, tile + 2 * BAKE_MARGIN);
-    lv_obj_set_style_bg_color(area, wall_base_at(row), 0);
-    lv_obj_set_style_bg_opa(area, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(area, 0, 0);
-    lv_obj_set_style_pad_all(area, 0, 0);
-    lv_obj_clear_flag(area, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(area, LV_OBJ_FLAG_CLICKABLE);
-    // The wallpaper behind (a child image at the negative slot offset —
-    // pixel-exact backdrop for this tile's halo): the photo asset when
-    // compiled in, else the flattened duotone stack.
-    const void* wall_src = nullptr;
-    if (wall_flat) {
-        wall_src = wall_flat;
-    } else {
-        extern const lv_image_dsc_t img_wall_photo;
-        wall_src = &img_wall_photo;   // the compiled-in photo wall
-    }
-    if (wall_src) {
-        lv_obj_t* wl = lv_image_create(area);
-        lv_image_set_src(wl, (const lv_image_dsc_t*)wall_src);
-        lv_obj_set_pos(wl, -(icon_x + BAKE_MARGIN), -(cell_y + BAKE_MARGIN));
-        lv_obj_clear_flag(wl, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_clear_flag(wl, LV_OBJ_FLAG_CLICKABLE);
-    } else if (!wall_missing_warned) {
-        wall_missing_warned = true;
-        Serial.println("[bake] no wall source: tiles bake on flat local tone");
-    }
-
-    // Key the glass lift to what actually sits behind this slot: the
-    // compiled photo's local average (or the duotone tone in fallback).
-    g_lift_key = wall_flat ? wall_base_at(row)
-                           : photo_avg_at(icon_x, cell_y, tile, tile);
-
-    lv_obj_t* body = lv_obj_create(area);
-    lv_obj_set_size(body, tile, tile);
-    lv_obj_set_pos(body, BAKE_MARGIN, BAKE_MARGIN);
-    lv_obj_set_style_radius(body, radius, 0);
-    lv_obj_set_style_pad_all(body, 0, 0);
-    lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
-    build_tile_glass(body, d, row, pressed);
-
-    // Glyph: the WHITE Phosphor-FILL icon (the iPhone app-icon glyph); dark
-    // ink on the silver tile. Opacity drops with the pressed bake (the dim).
-    lv_obj_t* glyph = lv_label_create(body);
-    lv_label_set_text(glyph, d->glyph);
-    lv_obj_set_style_text_font(glyph, G.glyph_font, 0);
-    lv_obj_set_style_text_color(glyph, icon_glyph_color_of(d), 0);
-    lv_obj_set_style_text_opa(glyph, pressed ? 160 : 255, 0);
-    lv_obj_center(glyph);
-    lv_obj_set_style_text_letter_space(glyph, 0, 0);
-
-    lv_obj_update_layout(area);
-    return lv_snapshot_take(area, LV_COLOR_FORMAT_RGB565);
-}
-
-static void build_tile_glass(lv_obj_t* tile, const AppDef* d, int row, bool pressed) {
-    // The iOS icon recipe (one source of truth); the pressed bake = the
-    // dimmed variant via glass_tile's radius<0 sentinel.
-    glass_tile(tile, d, pressed ? -1 : G.radius, row);
-    lv_obj_set_style_radius(tile, G.radius, 0);
-}
-
-struct TileBake { const lv_draw_buf_t* rest; const lv_draw_buf_t* down; };
-
-static void tile_press_swap_cb(lv_event_t* e) {
-    lv_obj_t* img = (lv_obj_t*)lv_event_get_target(e);
-    TileBake* b = (TileBake*)lv_obj_get_user_data(img);
-    if (!b) return;
-    const bool pressed = (lv_event_get_code(e) == LV_EVENT_PRESSED);
-    lv_image_set_src(img, (const lv_image_dsc_t*)(pressed ? b->down : b->rest));
-}
-
+// (The round-3 tile bake was retired: the iOS icons = opaque + cheap, so
+// the bake's snapshot machinery no longer pays for itself — and its halo
+// composited seams over the photo. The live render = a few blits/strip.)
 static void make_tile(lv_obj_t* page, int slot, int app_index) {
     const AppDef* d = shell_app_at(app_index);
     if (!d) return;
@@ -437,68 +314,34 @@ static void make_tile(lv_obj_t* page, int slot, int app_index) {
     const int cell_y = row * G.cell_h + (row ? G.row_gap : 0);
     const int icon_x = cell_x + (G.cell_w - G.tile) / 2;
 
-    // BAKE: composite this tile (wall backdrop + shadow + glass + glint +
-    // glyph) once into an opaque bitmap, then show it through a transparent
-    // hit-target. Falls back to the live glass if a snapshot is unavailable.
-    lv_obj_t* scratch = lv_obj_create((lv_obj_t*)nullptr);   // offscreen
-    lv_obj_set_style_bg_opa(scratch, LV_OPA_TRANSP, 0);
-    lv_draw_buf_t* rest = bake_tile(scratch, d, icon_x, cell_y, G.tile,
-                                    G.radius, row, false);
-    lv_draw_buf_t* down = bake_tile(scratch, d, icon_x, cell_y, G.tile,
-                                    G.radius, row, true);
-    lv_obj_delete(scratch);
+    // The iOS-class app icon, rendered live. The icon recipe = cheap now
+    // (opaque fill + 1px contour + one clipped light child + the glyph):
+    // no glass, no shadow, no bake. The bench = the = (the = = = = the = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
+    lv_obj_t* icon = lv_obj_create(page);
+    lv_obj_set_size(icon, G.tile, G.tile);
+    lv_obj_set_pos(icon, icon_x, cell_y);
+    glass_tile(icon, d, G.radius, row);
+    lv_obj_set_style_radius(icon, G.radius, 0);
+    lv_obj_set_style_pad_all(icon, 0, 0);
+    lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(icon, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(icon, tile_clicked_cb, LV_EVENT_CLICKED,
+                        (void*)(intptr_t)app_index);
+    // Press feedback: dim the icon (the iOS tap-dim), not brighten it.
+    lv_obj_set_style_bg_opa(icon, LV_OPA_40, LV_STATE_PRESSED);
+    lv_obj_set_style_shadow_opa(icon, 0, LV_STATE_PRESSED);
+    lv_obj_set_style_border_opa(icon, 40, LV_STATE_PRESSED);
 
-    if (rest && down) {
-        lv_obj_t* icon = lv_image_create(page);
-        lv_obj_set_pos(icon, icon_x - BAKE_MARGIN, cell_y - BAKE_MARGIN);
-        lv_image_set_src(icon, (const lv_image_dsc_t*)rest);
-        lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(icon, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_flag(icon, LV_OBJ_FLAG_ADV_HITTEST);
-        lv_obj_add_event_cb(icon, tile_clicked_cb, LV_EVENT_CLICKED,
-                            (void*)(intptr_t)app_index);
-        // Pressed = the pre-baked pressed bitmap, swapped on the edges.
-        lv_obj_add_event_cb(icon, tile_press_swap_cb, LV_EVENT_PRESSED, NULL);
-        lv_obj_add_event_cb(icon, tile_press_swap_cb, LV_EVENT_RELEASED, NULL);
-        lv_obj_add_event_cb(icon, tile_press_swap_cb, LV_EVENT_PRESS_LOST, NULL);
-        static TileBake bakes[16];   // per-tile pair (8 tiles max x2 pages)
-        const int bi = app_index & 15;
-        bakes[bi] = { rest, down };
-        lv_obj_set_user_data(icon, &bakes[bi]);
-    } else {
-        if (rest) lv_draw_buf_destroy(rest);
-        if (down) lv_draw_buf_destroy(down);
-        // LIVE FALLBACK: the pre-gauntlet path (translucent glass, shadows).
-        lv_obj_t* icon = lv_obj_create(page);
-        lv_obj_set_size(icon, G.tile, G.tile);
-        lv_obj_set_pos(icon, icon_x, cell_y);
-        glass_tile(icon, d, G.radius, row);
-        lv_obj_set_style_radius(icon, G.radius, 0);
-        lv_obj_set_style_pad_all(icon, 0, 0);
-        lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(icon, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(icon, tile_clicked_cb, LV_EVENT_CLICKED,
-                            (void*)(intptr_t)app_index);
+    // Glyph: the WHITE Phosphor-FILL icon (dark ink on the silver tile).
+    lv_obj_t* glyph = lv_label_create(icon);
+    lv_label_set_text(glyph, d->glyph);
+    lv_obj_set_style_text_font(glyph, G.glyph_font, 0);
+    lv_obj_set_style_text_color(glyph, icon_glyph_color_of(d), 0);
+    lv_obj_set_style_text_opa(glyph, 255, 0);
+    lv_obj_center(glyph);
+    lv_obj_set_style_text_letter_space(glyph, 0, 0);
 
-        lv_obj_t* glyph = lv_label_create(icon);
-        lv_label_set_text(glyph, d->glyph);
-        lv_obj_set_style_text_font(glyph, G.glyph_font, 0);
-        lv_obj_set_style_text_color(glyph, THEME_INK, 0);
-        lv_obj_set_style_text_opa(glyph, 235, 0);
-        lv_obj_center(glyph);
-        lv_obj_set_style_text_letter_space(glyph, 0, 0);
-    }
-
-    // iOS label anatomy: white text + a soft dark ghost offset 2px down for
-// legibility over any backdrop (the reference home screen renders both).
-lv_obj_t* label = lv_label_create(page);
-    lv_label_set_text(label, d->title);
-    lv_obj_set_style_text_font(label, G.label_font, 0);
-    lv_obj_set_style_text_color(label, lv_color_hex(0xffffff), 0);
-    lv_obj_set_width(label, G.cell_w);
-    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(label, cell_x, cell_y + G.tile + G.label_gap);
+    // iOS label anatomy: white text + a 2px dark ghost (read over anything).
     lv_obj_t* ghost = lv_label_create(page);
     lv_label_set_text(ghost, d->title);
     lv_obj_set_style_text_font(ghost, G.label_font, 0);
@@ -508,7 +351,15 @@ lv_obj_t* label = lv_label_create(page);
     lv_obj_set_style_text_align(ghost, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(ghost, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(ghost, cell_x, cell_y + G.tile + G.label_gap + 2);
-    lv_obj_move_foreground(label);
+
+    lv_obj_t* label = lv_label_create(page);
+    lv_label_set_text(label, d->title);
+    lv_obj_set_style_text_font(label, G.label_font, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(0xffffff), 0);
+    lv_obj_set_width(label, G.cell_w);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(label, cell_x, cell_y + G.tile + G.label_gap);
 }
 
 static void refresh_dots(void) {
@@ -592,7 +443,6 @@ void launcher_init(lv_obj_t* parent) {
         lv_obj_set_pos(wall_img, 0, 0);
         lv_obj_clear_flag(wall_img, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_clear_flag(wall_img, LV_OBJ_FLAG_CLICKABLE);
-        // wall_flat stays null: the tile bakes reference the photo directly.
     }
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
