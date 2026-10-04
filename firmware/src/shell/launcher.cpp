@@ -1,5 +1,6 @@
 #include "launcher.h"
 #include "shell.h"
+#include "draw/snapshot/lv_snapshot.h"
 #include "statusbar.h"
 #include "../theme.h"
 #include "../hal/board_caps.h"
@@ -304,6 +305,56 @@ static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius, int row) {
 // (The round-3 tile bake was retired: the iOS icons = opaque + cheap, so
 // the bake's snapshot machinery no longer pays for itself — and its halo
 // composited seams over the photo. The live render = a few blits/strip.)
+struct TileBake { lv_draw_buf_t* rest; lv_draw_buf_t* down; };
+
+static void tile_press_swap_cb(lv_event_t* e) {
+    lv_obj_t* img = (lv_obj_t*)lv_event_get_target(e);
+    TileBake* b = (TileBake*)lv_obj_get_user_data(img);
+    if (!b) return;
+    lv_image_set_src(img, (const lv_image_dsc_t*)
+        (lv_event_get_code(e) == LV_EVENT_PRESSED ? b->down : b->rest));
+}
+
+// ---- Icon bake (round 2: the swipe needs blits) -----------------------------
+// The live icons render ~3x the baked cost per swipe frame in the sim bench
+// (3.97 vs 1.26 ms); at S3 scale that is the difference between butter and
+// chop. These are OPAQUE squircles — so the bake needs no wallpaper/halo at
+// all (that halo was the seam bug): snapshot the bare icon + glyph w/ the
+// PRESSED styles pre-applied for the dim variant.
+#define ICON_BX (lv_display_get_horizontal_resolution(NULL) + 10)   // parked
+#define ICON_BY 10                                                  // right of screen
+static lv_draw_buf_t* iconBake(lv_obj_t* parent, const AppDef* d, bool pressed) {
+    lv_obj_t* icon = lv_obj_create(lv_layer_top());  // scratch on the top
+    lv_obj_set_size(icon, G.tile, G.tile);           // layer: above the wall +
+    lv_obj_set_pos(icon, 0, 0);                      // the pages, AT (0,0) —
+                                                     // always renderable; the
+                                                     // snapshot happens during
+                                                     // init, pre-first-frame
+    glass_tile(icon, d, G.radius, 0);
+    lv_obj_set_style_radius(icon, G.radius, 0);
+    lv_obj_set_style_pad_all(icon, 0, 0);
+    lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(icon, pressed ? LV_OPA_40 : LV_OPA_COVER, 0);
+    lv_obj_set_style_shadow_opa(icon, 0, 0);   // no shadow in the bake: its
+    lv_obj_set_style_border_opa(icon, 40, 0);  // ext ring = the black gutters
+    lv_obj_set_style_shadow_width(icon, 0, 0);
+
+    lv_obj_t* glyph = lv_label_create(icon);
+    lv_label_set_text(glyph, d->glyph);
+    lv_obj_set_style_text_font(glyph, G.glyph_font, 0);
+    lv_obj_set_style_text_color(glyph, icon_glyph_color_of(d), 0);
+    lv_obj_set_style_text_opa(glyph, pressed ? 160 : 255, 0);
+    lv_obj_center(glyph);
+    lv_obj_set_style_text_letter_space(glyph, 0, 0);
+
+    lv_obj_update_layout(icon);
+    // ARGB8888: the snapshot's outside-the-radius corners = TRANSPARENT
+    // (the 565 snapshot = flattened them to black = the "black squares").
+    lv_draw_buf_t* buf = lv_snapshot_take(icon, LV_COLOR_FORMAT_ARGB8888);
+    lv_obj_delete(icon);
+    return buf;
+}
+
 static void make_tile(lv_obj_t* page, int slot, int app_index) {
     const AppDef* d = shell_app_at(app_index);
     if (!d) return;
@@ -314,32 +365,51 @@ static void make_tile(lv_obj_t* page, int slot, int app_index) {
     const int cell_y = row * G.cell_h + (row ? G.row_gap : 0);
     const int icon_x = cell_x + (G.cell_w - G.tile) / 2;
 
-    // The iOS-class app icon, rendered live. The icon recipe = cheap now
-    // (opaque fill + 1px contour + one clipped light child + the glyph):
-    // no glass, no shadow, no bake. The bench = the = (the = = = = the = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
-    lv_obj_t* icon = lv_obj_create(page);
-    lv_obj_set_size(icon, G.tile, G.tile);
-    lv_obj_set_pos(icon, icon_x, cell_y);
-    glass_tile(icon, d, G.radius, row);
-    lv_obj_set_style_radius(icon, G.radius, 0);
-    lv_obj_set_style_pad_all(icon, 0, 0);
-    lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(icon, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(icon, tile_clicked_cb, LV_EVENT_CLICKED,
-                        (void*)(intptr_t)app_index);
-    // Press feedback: dim the icon (the iOS tap-dim), not brighten it.
-    lv_obj_set_style_bg_opa(icon, LV_OPA_40, LV_STATE_PRESSED);
-    lv_obj_set_style_shadow_opa(icon, 0, LV_STATE_PRESSED);
-    lv_obj_set_style_border_opa(icon, 40, LV_STATE_PRESSED);
+    // The icon = a pre-baked OPAQUE bitmap (no halo, no backdrop, no glass:
+    // the squircle = self-contained; the photo = behind it, untouched).
+    // Sim bench: the live icons = 3.97 ms/frame vs the baked = 1.26 → at S3
+    // scale the baked path = the butter story.
+    static TileBake bakes[16];
+    const int bi = app_index & 15;
+    bakes[bi].rest = iconBake(page, d, false);
+    bakes[bi].down = iconBake(page, d, true);
+    if (bakes[bi].rest && bakes[bi].down) {
+        lv_obj_t* icon = lv_image_create(page);
+        lv_obj_set_pos(icon, icon_x, cell_y);   // buf = 145² = the icon exactly
+        lv_image_set_src(icon, (const lv_image_dsc_t*)bakes[bi].rest);
+        lv_obj_set_style_bg_opa(icon, LV_OPA_TRANSP, 0);   // lv_image = an lv_obj:
+                                                           // its default dark bg
+                                                           // painted the boxes
+        lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(icon, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(icon, tile_clicked_cb, LV_EVENT_CLICKED,
+                            (void*)(intptr_t)app_index);
+        lv_obj_add_event_cb(icon, tile_press_swap_cb, LV_EVENT_PRESSED, NULL);
+        lv_obj_add_event_cb(icon, tile_press_swap_cb, LV_EVENT_RELEASED, NULL);
+        lv_obj_add_event_cb(icon, tile_press_swap_cb, LV_EVENT_PRESS_LOST, NULL);
+        lv_obj_set_user_data(icon, &bakes[bi]);
+    } else {
+        // Snapshot unavailable: the live icon (the same recipe + the dim).
+        if (bakes[bi].rest)  lv_draw_buf_destroy(bakes[bi].rest);
+        if (bakes[bi].down)  lv_draw_buf_destroy(bakes[bi].down);
+        lv_obj_t* icon = lv_obj_create(page);
+        lv_obj_set_size(icon, G.tile, G.tile);
+        lv_obj_set_pos(icon, icon_x, cell_y);
+        glass_tile(icon, d, G.radius, row);
+        lv_obj_set_style_radius(icon, G.radius, 0);
+        lv_obj_set_style_pad_all(icon, 0, 0);
+        lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(icon, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(icon, tile_clicked_cb, LV_EVENT_CLICKED,
+                            (void*)(intptr_t)app_index);
+        lv_obj_set_style_bg_opa(icon, LV_OPA_40, LV_STATE_PRESSED);
 
-    // Glyph: the WHITE Phosphor-FILL icon (dark ink on the silver tile).
-    lv_obj_t* glyph = lv_label_create(icon);
-    lv_label_set_text(glyph, d->glyph);
-    lv_obj_set_style_text_font(glyph, G.glyph_font, 0);
-    lv_obj_set_style_text_color(glyph, icon_glyph_color_of(d), 0);
-    lv_obj_set_style_text_opa(glyph, 255, 0);
-    lv_obj_center(glyph);
-    lv_obj_set_style_text_letter_space(glyph, 0, 0);
+        lv_obj_t* glyph = lv_label_create(icon);
+        lv_label_set_text(glyph, d->glyph);
+        lv_obj_set_style_text_font(glyph, G.glyph_font, 0);
+        lv_obj_set_style_text_color(glyph, icon_glyph_color_of(d), 0);
+        lv_obj_center(glyph);
+    }
 
     // iOS label anatomy: white text + a 2px dark ghost (read over anything).
     lv_obj_t* ghost = lv_label_create(page);
