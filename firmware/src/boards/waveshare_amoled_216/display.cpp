@@ -25,7 +25,9 @@ void display_hal_init(void) {
 }
 
 void display_hal_begin(void) {
-    gfx->begin();
+    // 80MHz quad-SPI: the CO5300 panel = spec'd for it (40MHz default = the
+    // Arduino_GFX fallback) — the flush = the swipe bottleneck at 40.
+    gfx->begin(80000000);
     gfx->fillScreen(0x0000);
     gfx->setBrightness(200);
 
