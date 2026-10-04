@@ -6,8 +6,9 @@
 #include <stdio.h>
 #include <string.h>
 
-// Apple-grade status type: Inter Medium (SIL OFL; mirrors the old styrene_20)
-LV_FONT_DECLARE(font_inter_20);
+// Apple-grade status type: Inter Medium (SIL OFL) — 32px: the photo wall
+// drowned the 28px row; bigger + a top scrim = the legibility fix.
+LV_FONT_DECLARE(font_inter_32);
 
 // Inset from the panel edge. The 2.16's glass has rounded corners; the rest of
 // the UI clears them with a 20px margin, and the status row sits nearer the
@@ -53,6 +54,7 @@ static void refresh_link(void) {
              s_wifi_up ? PH_WIFI " " : "",
              s_ble == BLE_STATE_CONNECTED ? PH_BLUETOOTH : "");
     lv_label_set_text(lbl_link, buf);
+    if (lbl_link_gh) lv_label_set_text(lbl_link_gh, buf);
     lv_obj_set_style_text_color(lbl_link, lv_color_hex(0xE5E5EA), 0);
     if (lbl_link_gh) {
         lv_label_set_text(lbl_link_gh, buf);
@@ -84,13 +86,30 @@ static void refresh_battery(void) {
     }
 }
 
+// The top-fade scrim's ramp: 80% black at the top edge → clear at the row's
+// bottom; LVGL's stop fracs = 0..255.
+static const lv_color_t scrim_cols[2] = { LV_COLOR_MAKE(0,0,0), LV_COLOR_MAKE(0,0,0) };
+static const uint8_t     scrim_opas[2] = { LV_OPA_80, LV_OPA_TRANSP };
+static const uint8_t     scrim_fracs[2] = { 0, 255 };
+
 void statusbar_init(lv_obj_t* parent) {
     const int W = board_caps().width;
 
     bar = lv_obj_create(parent);
     lv_obj_set_size(bar, W, STATUSBAR_H);
     lv_obj_set_pos(bar, 0, 0);
+    // Legibility over the photo: a short TOP SCRIM — black fading to clear
+    // within ~1 row height (not a glass box: the = = the = = the factory
+    // anatomy carries no pill and the = = the = = the = = = =
     lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_grad_dir(bar, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_grad_opa(bar, 255, 0);
+    static lv_grad_dsc_t scrim_grad;
+    lv_grad_init_stops(&scrim_grad, scrim_cols, scrim_opas, scrim_fracs, 2);
+    lv_grad_vertical_init(&scrim_grad);
+    lv_obj_set_style_bg_grad(bar, &scrim_grad, 0);
+    lv_obj_set_style_bg_grad_opa(bar, 255, 0);
     lv_obj_set_style_border_width(bar, 0, 0);
     lv_obj_set_style_pad_all(bar, 0, 0);
     lv_obj_set_style_radius(bar, 0, 0);
@@ -104,31 +123,38 @@ void statusbar_init(lv_obj_t* parent) {
     // smeared over the photo — cut entirely per user call.
     lbl_clock = lv_label_create(bar);
     lv_label_set_text(lbl_clock, "--:--");
-    lv_obj_set_style_text_font(lbl_clock, &font_inter_20, 0);
+    lv_obj_set_style_text_font(lbl_clock, &font_inter_32, 0);
     lv_obj_set_style_text_color(lbl_clock, lv_color_hex(0xffffff), 0);
     lv_obj_align(lbl_clock, LV_ALIGN_LEFT_MID, SB_PAD_X, 0);
+    clk_ghost = lv_label_create(bar);
+    lv_label_set_text(clk_ghost, "--:--");
+    lv_obj_set_style_text_font(clk_ghost, &font_inter_32, 0);
+    lv_obj_set_style_text_color(clk_ghost, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_text_opa(clk_ghost, 190, 0);
+    lv_obj_align(clk_ghost, LV_ALIGN_LEFT_MID, SB_PAD_X - 2, GHOST_DY);
 
     lbl_batt = lv_label_create(bar);
-    lv_obj_set_style_text_font(lbl_batt, &font_inter_20, 0);
-    lv_obj_set_style_text_color(lbl_batt, lv_color_hex(0xF2F2F7), 0);
+    lv_obj_set_style_text_font(lbl_batt, &font_inter_32, 0);
+    lv_obj_set_style_text_color(lbl_batt, lv_color_hex(0xffffff), 0);
     lbl_batt_gh = lv_label_create(bar);
-    lv_obj_set_style_text_font(lbl_batt_gh, &font_inter_20, 0);
-    lv_obj_set_style_text_color(lbl_batt_gh, lv_color_hex(0x0a0f14), 0);
-    lv_obj_set_style_text_opa(lbl_batt_gh, 140, 0);
-    lv_obj_align(lbl_batt_gh, LV_ALIGN_RIGHT_MID, -(SB_PAD_X + 14), GHOST_DY);
+    lv_obj_set_style_text_font(lbl_batt_gh, &font_inter_32, 0);
+    lv_obj_set_style_text_color(lbl_batt_gh, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_text_opa(lbl_batt_gh, 190, 0);
+    lv_obj_align(lbl_batt_gh, LV_ALIGN_RIGHT_MID, -(SB_PAD_X + 14 - 2), GHOST_DY);
     // Rounded-corner clearance: at the bar's height the corner curve eats
     // everything past ~x446; the battery row gets a deeper inset than the
     // clock's so the glyph's cap survives it.
     lv_obj_align(lbl_batt, LV_ALIGN_RIGHT_MID, -(SB_PAD_X + 14), 0);
 
     lbl_link = lv_label_create(bar);
-    lv_obj_set_style_text_font(lbl_link, &font_inter_20, 0);
-    lv_obj_set_style_text_color(lbl_link, lv_color_hex(0xE5E5EA), 0);
+    lv_obj_set_style_text_font(lbl_link, &font_inter_32, 0);
+    lv_obj_set_style_text_color(lbl_link, lv_color_hex(0xffffff), 0);
     lv_obj_align_to(lbl_link, lbl_batt, LV_ALIGN_OUT_LEFT_MID, -8, 0);
     lbl_link_gh = lv_label_create(bar);
-    lv_obj_set_style_text_font(lbl_link_gh, &font_inter_20, 0);
-    lv_obj_set_style_text_color(lbl_link_gh, lv_color_hex(0x0a0f14), 0);
-    lv_obj_set_style_text_opa(lbl_link_gh, 140, 0);
+    lv_obj_set_style_text_font(lbl_link_gh, &font_inter_32, 0);
+    lv_obj_set_style_text_color(lbl_link_gh, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_text_opa(lbl_link_gh, 190, 0);
+    lv_obj_align_to(lbl_link_gh, lbl_batt_gh, LV_ALIGN_OUT_LEFT_MID, -8, GHOST_DY);
 
     if (!board_caps().has_battery) {
         lv_obj_add_flag(lbl_batt, LV_OBJ_FLAG_HIDDEN);
@@ -141,6 +167,10 @@ void statusbar_init(lv_obj_t* parent) {
     if (clk_ghost) {
         lv_label_set_text(clk_ghost, lv_label_get_text(lbl_clock));
     }
+    if (lbl_batt_gh) {
+        lv_label_set_text(lbl_batt_gh, lv_label_get_text(lbl_batt));
+        lv_obj_align(lbl_batt_gh, LV_ALIGN_RIGHT_MID, -(SB_PAD_X + 14 - 2), GHOST_DY);
+    }
 }
 
 void statusbar_tick(void) {
@@ -150,6 +180,7 @@ void statusbar_tick(void) {
     if (strcmp(buf, s_last_clock) != 0) {   // only relayout when the minute flips
         strlcpy(s_last_clock, buf, sizeof(s_last_clock));
         lv_label_set_text(lbl_clock, buf);
+        if (clk_ghost) lv_label_set_text(clk_ghost, buf);
     }
 }
 
