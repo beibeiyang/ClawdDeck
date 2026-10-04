@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 64 px
  * Bpp: 4
- * Opts: --font $HOME/.cache/gauntlet/phosphor/package/src/thin/Phosphor-Thin.ttf --size 64 --bpp 4 --no-compress -r 0xE326 --format lvgl --lv-include lvgl.h -o font_phos_64.c --force-fast-kern-format
+ * Opts: --font ~/.cache/gauntlet/<local> --size 64 --bpp 4 --no-compress -r 0xE326 --format lvgl --lv-include lvgl.h -o font_phos_64.c --force-fast-kern-format
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

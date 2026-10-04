@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 20 px
  * Bpp: 4
- * Opts: --font $HOME/.cache/gauntlet/phosphor/package/src/thin/Phosphor-Thin.ttf --size 20 --bpp 4 --no-compress -r 0xE19A,0xE0BA,0xE0BE,0xE0C0,0xE0C2,0xE0C4,0xE0C6,0xE0DA,0xE270,0xE288,0xE2F0,0xE316,0xE326,0xE434,0xE44A,0xE4EA,0xE628,0xE802 --format lvgl --lv-include lvgl.h -o font_phos_20.c --force-fast-kern-format
+ * Opts: --font ~/.cache/gauntlet/<local> --size 20 --bpp 4 --no-compress -r 0xE19A,0xE0BA,0xE0BE,0xE0C0,0xE0C2,0xE0C4,0xE0C6,0xE0DA,0xE270,0xE288,0xE2F0,0xE316,0xE326,0xE434,0xE44A,0xE4EA,0xE628,0xE802 --format lvgl --lv-include lvgl.h -o font_phos_20.c --force-fast-kern-format
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE
