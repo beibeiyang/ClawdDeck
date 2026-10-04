@@ -295,6 +295,141 @@ static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius, int row) {
     lv_obj_set_style_shadow_opa(icon, 60, LV_STATE_PRESSED);
 }
 
+// ---- Tile bake -------------------------------------------------------------
+// A swipe dirties the full grid strip every frame and LVGL re-renders every
+// live glass tile in it — gradient fill + rim + outline + glint clip + soft
+// shadow + label — per strip per frame (the sim bench measured ~4ms/frame on
+// a 3-4GHz desktop; at ESP32-S3 scale that is single-digit FPS = the reported
+// choppiness). The factory Waveshare UI slides pre-made bitmaps instead.
+//
+// So: bake each tile ONCE at init — composite (wallpaper behind + shadow +
+// glass + rim + glint + glyph) into an opaque RGB565 draw_buf via
+// lv_snapshot_take, then replace the live tile body with that image. The
+// object keeps functioning as the click target; pressed state = a second
+// baked image swapped on the PRESSED/RELEASED events. Swipes then blit one
+// wall image + N tile images per strip — bitmap-class cost.
+static constexpr int BAKE_MARGIN = 20;   // covers shadow (ofs 5 + width 14) + outline 1
+
+// Build the live-glass tile into 'parent' at (0,0) — the exact glass_tile
+// recipe, used once per tile inside the bake scratch.
+static void build_tile_glass(lv_obj_t* tile, const AppDef* d, int row, bool pressed);
+
+static lv_draw_buf_t* bake_tile(lv_obj_t* scratch_root, const AppDef* d,
+                                int icon_x, int cell_y, int tile, int radius,
+                                int row, bool pressed) {
+    // scratch = (tile + 2*margin)² backdrop: the flattened wall positioned so
+    // the slot's exact wallpaper pixels sit behind the glass.
+    static bool wall_missing_warned = false;
+    lv_obj_t* area = lv_obj_create(scratch_root);
+    lv_obj_set_size(area, tile + 2 * BAKE_MARGIN, tile + 2 * BAKE_MARGIN);
+    lv_obj_set_style_bg_color(area, wall_base_at(row), 0);
+    lv_obj_set_style_bg_opa(area, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(area, 0, 0);
+    lv_obj_set_style_pad_all(area, 0, 0);
+    lv_obj_clear_flag(area, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(area, LV_OBJ_FLAG_CLICKABLE);
+    // The flattened wallpaper behind (a child image at the negative slot
+    // offset — pixel-exact backdrop for this tile's halo).
+    extern lv_draw_buf_t* launcher_wall_flat(void);
+    const lv_draw_buf_t* wall = launcher_wall_flat();
+    if (wall) {
+        lv_obj_t* wl = lv_image_create(area);
+        lv_image_set_src(wl, (const lv_image_dsc_t*)wall);
+        lv_obj_set_pos(wl, -(icon_x + BAKE_MARGIN), -(cell_y + BAKE_MARGIN));
+        lv_obj_clear_flag(wl, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(wl, LV_OBJ_FLAG_CLICKABLE);
+    } else if (!wall_missing_warned) {
+        wall_missing_warned = true;
+        Serial.println("[bake] no flattened wall: tiles bake on flat local tone");
+    }
+
+    lv_obj_t* body = lv_obj_create(area);
+    lv_obj_set_size(body, tile, tile);
+    lv_obj_set_pos(body, BAKE_MARGIN, BAKE_MARGIN);
+    lv_obj_set_style_radius(body, radius, 0);
+    lv_obj_set_style_pad_all(body, 0, 0);
+    lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+    build_tile_glass(body, d, row, pressed);
+
+    // Glyph (baked into the glass, ink on glass as before).
+    lv_obj_t* glyph = lv_label_create(body);
+    lv_label_set_text(glyph, d->glyph);
+    lv_obj_set_style_text_font(glyph, G.glyph_font, 0);
+    lv_obj_set_style_text_color(glyph, THEME_INK, 0);
+    lv_obj_set_style_text_opa(glyph, 235, 0);
+    lv_obj_center(glyph);
+    lv_obj_set_style_text_letter_space(glyph, 0, 0);
+
+    lv_obj_update_layout(area);
+    return lv_snapshot_take(area, LV_COLOR_FORMAT_RGB565);
+}
+
+static void build_tile_glass(lv_obj_t* tile, const AppDef* d, int row, bool pressed) {
+    // glass_tile()'s recipe with the state baked: pressed lifts the fill
+    // (opa 145→190) and deepens the puddle (opa 25→60) — the values the live
+    // object uses under LV_STATE_PRESSED.
+    const int  fill_opa   = pressed ? 190 : 145;
+    const int  grad_opa   = pressed ? 230 : 185;
+    const int  rim_opa    = pressed ? 120 : 95;
+    const int  shadow_opa = pressed ? 60 : 25;
+    const lv_color_t hue  = lv_color_hex(d->tile_rgb);
+    const lv_color_t wall = wall_base_at(row);
+
+    lv_obj_set_style_bg_color(tile,
+        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 165), 0);
+    lv_obj_set_style_bg_opa(tile, fill_opa, 0);
+    lv_obj_set_style_bg_grad_color(tile,
+        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 12), hue, 82), 0);
+    lv_obj_set_style_bg_grad_opa(tile, grad_opa, 0);
+    lv_obj_set_style_bg_grad_dir(tile, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_main_stop(tile, 0, 0);
+    lv_obj_set_style_bg_grad_stop(tile, 240, 0);
+
+    lv_obj_set_style_shadow_color(tile, GLASS_SHADOW, 0);
+    lv_obj_set_style_shadow_width(tile, 14, 0);
+    lv_obj_set_style_shadow_spread(tile, 0, 0);
+    lv_obj_set_style_shadow_ofs_y(tile, 5, 0);
+    lv_obj_set_style_shadow_opa(tile, shadow_opa, 0);
+
+    lv_obj_set_style_border_color(tile, RIM_CREAM, 0);
+    lv_obj_set_style_border_width(tile, 2, 0);
+    lv_obj_set_style_border_opa(tile, rim_opa, 0);
+
+    // Directional top-arc glint (the live recipe's child).
+    lv_obj_t* glint = lv_obj_create(tile);
+    lv_obj_set_size(glint, lv_obj_get_width(tile) - 28, (lv_obj_get_height(tile) * 5) / 8 - 14);
+    lv_obj_align(glint, LV_ALIGN_TOP_MID, 0, 8);
+    lv_obj_set_style_bg_color(glint, lv_color_mix(RIM_CREAM, lv_color_hex(0xfff6ea), 50), 0);
+    lv_obj_set_style_bg_grad_color(glint, RIM_CREAM, 0);
+    lv_obj_set_style_bg_grad_dir(glint, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_opa(glint, 78, 0);
+    lv_obj_set_style_bg_grad_opa(glint, 0, 0);
+    lv_obj_set_style_bg_main_stop(glint, 0, 0);
+    lv_obj_set_style_bg_grad_stop(glint, 255, 0);
+    lv_obj_set_style_radius(glint, (lv_obj_get_height(glint)) / 2, 0);
+    lv_obj_set_style_border_width(glint, 0, 0);
+    lv_obj_set_style_pad_all(glint, 0, 0);
+    lv_obj_clear_flag(glint, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(glint, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(glint, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_set_style_clip_corner(glint, true, 0);
+
+    lv_obj_set_style_outline_color(tile, GLASS_SHADOW, 0);
+    lv_obj_set_style_outline_width(tile, 1, 0);
+    lv_obj_set_style_outline_pad(tile, 0, 0);
+    lv_obj_set_style_outline_opa(tile, 90, 0);
+}
+
+struct TileBake { const lv_draw_buf_t* rest; const lv_draw_buf_t* down; };
+
+static void tile_press_swap_cb(lv_event_t* e) {
+    lv_obj_t* img = (lv_obj_t*)lv_event_get_target(e);
+    TileBake* b = (TileBake*)lv_obj_get_user_data(img);
+    if (!b) return;
+    const bool pressed = (lv_event_get_code(e) == LV_EVENT_PRESSED);
+    lv_image_set_src(img, (const lv_image_dsc_t*)(pressed ? b->down : b->rest));
+}
+
 static void make_tile(lv_obj_t* page, int slot, int app_index) {
     const AppDef* d = shell_app_at(app_index);
     if (!d) return;
@@ -305,28 +440,57 @@ static void make_tile(lv_obj_t* page, int slot, int app_index) {
     const int cell_y = row * G.cell_h + (row ? G.row_gap : 0);
     const int icon_x = cell_x + (G.cell_w - G.tile) / 2;
 
-    lv_obj_t* icon = lv_obj_create(page);
-    lv_obj_set_size(icon, G.tile, G.tile);
-    lv_obj_set_pos(icon, icon_x, cell_y);
-    glass_tile(icon, d, G.radius, row);
-    lv_obj_set_style_radius(icon, G.radius, 0);
-    lv_obj_set_style_pad_all(icon, 0, 0);
-    lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(icon, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(icon, tile_clicked_cb, LV_EVENT_CLICKED,
-                        (void*)(intptr_t)app_index);
+    // BAKE: composite this tile (wall backdrop + shadow + glass + glint +
+    // glyph) once into an opaque bitmap, then show it through a transparent
+    // hit-target. Falls back to the live glass if a snapshot is unavailable.
+    lv_obj_t* scratch = lv_obj_create((lv_obj_t*)nullptr);   // offscreen
+    lv_obj_set_style_bg_opa(scratch, LV_OPA_TRANSP, 0);
+    lv_draw_buf_t* rest = bake_tile(scratch, d, icon_x, cell_y, G.tile,
+                                    G.radius, row, false);
+    lv_draw_buf_t* down = bake_tile(scratch, d, icon_x, cell_y, G.tile,
+                                    G.radius, row, true);
+    lv_obj_delete(scratch);
 
-    // Glyph: Apple-style dark ink on the light glass (thin-line Phosphor
-    // replaces the stock montserrat symbols). Depth comes from the glass,
-    // not from overlay bands over it (attempt-1's dark glyph-floor strip
-    // banded the tile middles — deleted).
-    lv_obj_t* glyph = lv_label_create(icon);
-    lv_label_set_text(glyph, d->glyph);
-    lv_obj_set_style_text_font(glyph, G.glyph_font, 0);
-    lv_obj_set_style_text_color(glyph, THEME_INK, 0);
-    lv_obj_set_style_text_opa(glyph, 235, 0);
-    lv_obj_center(glyph);
-    lv_obj_set_style_text_letter_space(glyph, 0, 0);
+    if (rest && down) {
+        lv_obj_t* icon = lv_image_create(page);
+        lv_obj_set_pos(icon, icon_x - BAKE_MARGIN, cell_y - BAKE_MARGIN);
+        lv_image_set_src(icon, (const lv_image_dsc_t*)rest);
+        lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(icon, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(icon, LV_OBJ_FLAG_ADV_HITTEST);
+        lv_obj_add_event_cb(icon, tile_clicked_cb, LV_EVENT_CLICKED,
+                            (void*)(intptr_t)app_index);
+        // Pressed = the pre-baked pressed bitmap, swapped on the edges.
+        lv_obj_add_event_cb(icon, tile_press_swap_cb, LV_EVENT_PRESSED, NULL);
+        lv_obj_add_event_cb(icon, tile_press_swap_cb, LV_EVENT_RELEASED, NULL);
+        lv_obj_add_event_cb(icon, tile_press_swap_cb, LV_EVENT_PRESS_LOST, NULL);
+        static TileBake bakes[16];   // per-tile pair (8 tiles max x2 pages)
+        const int bi = app_index & 15;
+        bakes[bi] = { rest, down };
+        lv_obj_set_user_data(icon, &bakes[bi]);
+    } else {
+        if (rest) lv_draw_buf_destroy(rest);
+        if (down) lv_draw_buf_destroy(down);
+        // LIVE FALLBACK: the pre-gauntlet path (translucent glass, shadows).
+        lv_obj_t* icon = lv_obj_create(page);
+        lv_obj_set_size(icon, G.tile, G.tile);
+        lv_obj_set_pos(icon, icon_x, cell_y);
+        glass_tile(icon, d, G.radius, row);
+        lv_obj_set_style_radius(icon, G.radius, 0);
+        lv_obj_set_style_pad_all(icon, 0, 0);
+        lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(icon, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(icon, tile_clicked_cb, LV_EVENT_CLICKED,
+                            (void*)(intptr_t)app_index);
+
+        lv_obj_t* glyph = lv_label_create(icon);
+        lv_label_set_text(glyph, d->glyph);
+        lv_obj_set_style_text_font(glyph, G.glyph_font, 0);
+        lv_obj_set_style_text_color(glyph, THEME_INK, 0);
+        lv_obj_set_style_text_opa(glyph, 235, 0);
+        lv_obj_center(glyph);
+        lv_obj_set_style_text_letter_space(glyph, 0, 0);
+    }
 
     lv_obj_t* label = lv_label_create(page);
     lv_label_set_text(label, d->title);
@@ -337,6 +501,10 @@ static void make_tile(lv_obj_t* page, int slot, int app_index) {
     lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(label, cell_x, cell_y + G.tile + G.label_gap);
 }
+
+static lv_draw_buf_t* wall_flat = nullptr;   // the flattened wallpaper (held)
+
+lv_draw_buf_t* launcher_wall_flat(void) { return wall_flat; }
 
 static void refresh_dots(void) {
     if (!dots_row) return;
@@ -354,6 +522,47 @@ static void scroll_cb(lv_event_t* e) {
     (void)e;
     refresh_dots();
 }
+
+// ---- Swipe bench (sim diagnostics only) ------------------------------------
+// Drives a scripted horizontal swipe (24px/frame for ~1s) and prints the
+// wall-clock per frame, so render-cost changes measure directly in the sim.
+#ifdef BOARD_SIM
+#include <time.h>
+static lv_obj_t* bench_pages = nullptr;
+static int bench_frame = 0;
+static struct timespec bench_t0 = {0, 0};
+static uint64_t bench_ns_sum = 0;
+void launcher_bench_start(void);
+void launcher_bench_tick(void);
+void launcher_bench_start(void) {
+    bench_pages = pages;
+    bench_frame = 0;
+    bench_ns_sum = 0;
+    clock_gettime(CLOCK_MONOTONIC, &bench_t0);
+    Serial.println("[bench] swipe render bench: start");
+}
+void launcher_bench_tick(void) {
+    if (!bench_pages || bench_frame >= 40) {
+        if (bench_pages && bench_frame >= 40) {
+            Serial.printf("[bench] done: 40 frames, avg %.2f ms/frame\n",
+                          (double)bench_ns_sum / 40.0 / 1e6);
+            lv_obj_scroll_to_x(bench_pages, 0, LV_ANIM_OFF);
+            bench_pages = nullptr;
+        }
+        return;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &bench_t0);
+    lv_obj_scroll_by(bench_pages, -24, 0, LV_ANIM_OFF);
+    lv_refr_now(NULL);
+    struct timespec t1;
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    long long dt = (t1.tv_sec - bench_t0.tv_sec) * 1000000000LL
+                 + (t1.tv_nsec - bench_t0.tv_nsec);
+    if (bench_frame > 0) bench_ns_sum += dt;   // frame 0 = warmup
+    Serial.printf("[bench] f%02d %6.2f ms\n", bench_frame, dt / 1e6);
+    bench_frame++;
+}
+#endif // BOARD_SIM
 
 void launcher_init(lv_obj_t* parent) {
     compute_layout(board_caps());
@@ -380,7 +589,7 @@ void launcher_init(lv_obj_t* parent) {
     lv_obj_clear_flag(wall, LV_OBJ_FLAG_CLICKABLE);
     build_wallpaper(wall, W, H);
     lv_obj_update_layout(wall);
-    lv_draw_buf_t* wall_flat = lv_snapshot_take(wall, LV_COLOR_FORMAT_RGB565);
+    wall_flat = lv_snapshot_take(wall, LV_COLOR_FORMAT_RGB565);
     lv_obj_delete(wall);
     if (wall_flat) {
         lv_obj_t* wall_img = lv_image_create(root);
