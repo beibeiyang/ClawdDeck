@@ -17,6 +17,8 @@
 // readout below and a "Level!" accent flash when the tilt closes under
 // 0.5 degrees.
 
+LV_FONT_DECLARE(font_inter_16);
+LV_FONT_DECLARE(font_inter_24);
 LV_FONT_DECLARE(font_inter_20);   // degree readout — carries U+00B0 (regen range 0x20-0xB0)
 LV_FONT_DECLARE(font_inter_14);   // axis labels
 
@@ -83,7 +85,7 @@ static lv_obj_t* hairline(lv_obj_t* parent, int len, bool vertical) {
 static lv_obj_t* axis_label(lv_obj_t* parent, const char* txt) {
     lv_obj_t* l = lv_label_create(parent);
     lv_label_set_text(l, txt);
-    lv_obj_set_style_text_font(l, &font_inter_14, 0);
+    lv_obj_set_style_text_font(l, &font_inter_16, 0);
     lv_obj_set_style_text_color(l, THEME_DIM, 0);
     lv_obj_clear_flag(l, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(l, LV_OBJ_FLAG_CLICKABLE);
@@ -267,12 +269,19 @@ static void level_create(lv_obj_t* root) {
     // hue story; rim + body carry the material.
     const lv_color_t hue  = lv_color_hex(LEVEL_HUE);
     const lv_color_t wall = lv_color_mix(THEME_BG_BOT, THEME_BG_TOP, 140);
+    // The launcher's EXACT fill numbers (the house chroma-dominant ramp —
+    // proven anti-banding by critics r6-r8; banding appeared only when the
+    // stops drifted off-recipe). The dial keeps the blue tile story as the
+    // pool; the top carries the cream sheen.
     lv_obj_set_style_bg_color(dial,
         lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 208), 0);
-    lv_obj_set_style_bg_opa(dial, 165, 0);
+    lv_obj_set_style_bg_opa(dial, 145, 0);
+    // Chroma-flow over luma-flow (r7 at dial scale): the pool = saturated
+    // pale blue vs the cream top — the luma ramp compresses while the eye
+    // rides the hue shift (16bpp plateaus hide in chroma).
     lv_obj_set_style_bg_grad_color(dial,
-        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 18), hue, 82), 0);
-    lv_obj_set_style_bg_grad_opa(dial, 200, 0);
+        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 12), hue, 165), 0);
+    lv_obj_set_style_bg_grad_opa(dial, 185, 0);
     lv_obj_set_style_bg_grad_dir(dial, LV_GRAD_DIR_VER, 0);
 
     lv_obj_set_style_bg_main_stop(dial, 0, 0);
@@ -296,6 +305,23 @@ static void level_create(lv_obj_t* root) {
     lv_obj_set_style_pad_all(dial, 0, 0);
     lv_obj_clear_flag(dial, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(dial, LV_OBJ_FLAG_CLICKABLE);
+    // Directional rim (critic r2b): light from above — the round-form glint
+    // (voice's proven arc): a concentric circle child drawing only its top
+    // border, so the sheen follows the curvature instead of a uniform edge.
+    lv_obj_t* glint = lv_obj_create(dial);
+    lv_obj_set_size(glint, dial_size - 12, dial_size - 12);
+    lv_obj_align(glint, LV_ALIGN_TOP_MID, 0, 4);
+    lv_obj_set_style_radius(glint, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(glint, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(glint, RIM_CREAM, 0);
+    lv_obj_set_style_border_width(glint, 3, 0);
+    lv_obj_set_style_border_side(glint, LV_BORDER_SIDE_TOP, 0);
+    lv_obj_set_style_border_opa(glint, 110, 0);
+    lv_obj_set_style_outline_width(glint, 0, 0);
+    lv_obj_set_style_pad_all(glint, 0, 0);
+    lv_obj_clear_flag(glint, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(glint, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(glint, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
     // ---- Engraved instrument work inside the dial -------------------------
     ring(dial, ring1_d, 0xf2e6da, 18, 1);
@@ -339,7 +365,7 @@ static void level_create(lv_obj_t* root) {
     readout = lv_label_create(root);
     lv_obj_set_width(readout, W);           // pin width: no per-tick reflow drift
     lv_label_set_text(readout, readout_buf);
-    lv_obj_set_style_text_font(readout, &font_inter_20, 0);
+    lv_obj_set_style_text_font(readout, &font_inter_24, 0);
     lv_obj_set_style_text_color(readout, THEME_TEXT, 0);
     lv_obj_set_style_text_align(readout, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(readout, LV_LABEL_LONG_WRAP);

@@ -787,8 +787,7 @@ def unpair_macos() -> bool:
     if out is None:
         return False
 
-    # Each line looks like:
-    #   address: 02-55-AF-D3-5c-3d, ... name: "Clawdmeter", ...
+    # Each line looks like: "address: <bdaddr>, ... name: "Clawdmeter", ..."
     addr = None
     for line in out.splitlines():
         if f'name: "{DEVICE_NAME}"' in line:

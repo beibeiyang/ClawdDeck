@@ -1,25 +1,114 @@
-# Clawdmeter
+# ClawdDeck
 
 <img src="assets/readme/waving.gif" width="120" align="right" alt="">
 
-A small ESP32 dashboard I made for my desk to keep an eye on Claude Code usage.
+A desk-side ESP32 command deck: a pocket dashboard that keeps an eye on
+Claude Code usage — and runs a full Apple-grade app suite on its
+480×480 square AMOLED.
 
-It runs on a [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786) as well as a few other alternative boards and pairs over Bluetooth, the splash screen plays pixel-art Clawd animations that get
-busier when your usage rate climbs. The two side buttons send Space and
-Shift+Tab over BLE HID for Claude Code's voice mode and mode-toggle shortcuts.
+ClawdDeck grew out of **Clawdmeter** — the Claude Code usage meter that is
+still the heart of the deck (its meter app is the launcher's first tile).
+ClawdDeck = Clawdmeter + the phone-style launcher it deserved.
 
-<img width="1179" height="994" alt="Usage meter" src="https://github.com/user-attachments/assets/83e54aea-0932-428f-94aa-b3ede3a360aa" />
+<a href="https://buymeacoffee.com/growingcatb"><img src="assets/readme/bmc-button.png" width="190" alt="Buy Me A Coffee"></a>
+
+|  Home launcher  |  On hardware  |
+| :---: | :---: |
+| ![Home](screenshots/readme/home.png) | ![Hardware](screenshots/readme/home-hw.png) |
+
+## The apps
+
+480×480 square AMOLED, LVGL 9, 16bpp — no GPU, no blur, everything drawn.
+Every screen went through the same gauntlet: build → verify against real
+reference imagery → independent blind critic → iterate until the
+critic takes the candidate over the reference. The launcher now runs the
+factory-desktop look: a full-bleed photo wallpaper, opaque iOS-class app
+icons with white filled glyphs, ghost-shadowed labels, and a bare white
+status row.
+
+|  |  |  |  |
+| :---: | :---: | :---: | :---: |
+| ![Clock](screenshots/readme/clock.png) | ![Sessions](screenshots/readme/sessions.png) | ![Level](screenshots/readme/level-hw.png) | ![Voice](screenshots/readme/voice.png) |
+| **Clock** — glass watchface card, live seconds tier, 24h via the host | **Sessions** — recent Claude sessions, tap to resume on the Mac | **Level** — real IMU bubble dial (89.2° of desk tilt, live) | **Voice** — push-to-talk hero, glass mic button |
+| ![Settings](screenshots/readme/settings.png) | ![SpecAnalyzer](screenshots/readme/micscope.png) | ![Host](screenshots/readme/apps-registry.png) | ![Clawdmeter](screenshots/splash.gif) |
+| **Settings** — brightness, BLE pairing, storage/memory/battery telemetry, close background apps, restart / power-off (two-tap guarded) | **SpecAnalyzer** — live spectrum | **Host** — placeholder in the glass-card language | **Clawdmeter** — the original usage meter + splash animations |
+
+On hardware — settings with real BLE name/MAC + the pairing danger card on
+the panel, next to the sim reference:
+
+|  Settings (sim)  |  Settings (hardware)  |
+| :---: | :---: |
+| ![Settings sim](screenshots/readme/settings.png) | ![Settings hw](screenshots/readme/settings-hw.png) |
+
+### What's in Settings now
+
+- **Display** — brightness (cycled live, NVS-backed).
+- **Connection** — device name, MAC, bond status; **Clear pairing** as the
+  destructive card (two-tap confirm).
+- **Device** — **storage %** (of the sketch partition), **memory %** (heap,
+  with PSRAM boards showing free RAM), **battery %** (live, charging aware).
+- **Actions** — **Close background apps (n)** (torn down properly, count
+  updates live), **Restart**, **Power off**. The two one-shot actions are
+  guarded: first tap arms them ("Tap again to confirm", 4-second window) so
+  a stray double-press can't reboot or brick the session.
+
+## Setting up a brand-new board (zero to running)
+
+1. **Get the code**
+
+   ```bash
+   git clone https://github.com/beibeiyang/ClawdDeck.git
+   cd ClawdDeck
+   ```
+
+2. **Install PlatformIO CLI** (once per machine):
+
+   ```bash
+   pip install platformio          # or: pipx install platformio
+   ```
+
+3. **Plug the board in over USB** (a data cable, not charge-only). Linux
+   shows it as `/dev/ttyACM0`, macOS as `/dev/cu.usbmodem*`, Windows as a
+   `COM` port in Device Manager. On Linux, add yourself to the `dialout`
+   group (`sudo usermod -aG dialout $USER`, then log out/in) — or prefix the
+   flash command with `sg dialout -c`.
+
+4. **Flash the firmware** ("flush" = this — writing the firmware image into
+   the board's flash):
+
+   ```bash
+   ./flash.sh waveshare_amoled_216                     # Linux (defaults to /dev/ttyACM0)
+   ./flash-mac.sh waveshare_amoled_216                 # macOS (auto-detects the port)
+   pio run -d firmware -e waveshare_amoled_216 -t upload --upload-port COM5   # Windows
+   ```
+
+   The board name = the PlatformIO env — run `./flash.sh` with no arguments
+   to list the available boards. The first flash builds the whole firmware
+   (~1-3 min); reflashes are seconds. The board reboots itself when done.
+
+5. **First boot** — the splash plays the Clawd animations while the device
+   advertises over Bluetooth as **Clawdmeter**, waiting for a paired host.
+
+6. **Pair + install the daemon** — follow your platform's section below
+   (Linux, macOS or Windows): pair over Bluetooth, then run the matching
+   installer, which pushes your Claude usage to the display every 60 s.
+
+7. **First gestures** — swipe left/right to page the launcher, tap a tile to
+   open its app, swipe up (or the home pill) to go home. In
+   **Settings → Actions**, Power off / Restart ask for a second confirming
+   tap.
 
 ## Screens
 
-The device boots into the splash. Tap the screen anywhere to switch to the Usage view; tap again to flip back to the splash.
+The device boots into the splash. Swiping horizontally pages the launcher;
+tap a tile to open its app; swipe up (or the home pill) returns home.
 
-|              Splash               |              Usage              |
-| :-------------------------------: | :-----------------------------: |
-| ![Splash](screenshots/splash.gif) | ![Usage](screenshots/usage.png) |
-|   Splash; touch-toggle anytime    | Session and weekly utilization  |
-
-While the splash is up, the middle (PWR) button cycles animations. **Hold the power button for 3 seconds, then release, to put the device into pairing mode** — this clears the saved Bluetooth bond and re-advertises. The firmware also auto-rotates animations every 20 s within the current usage-rate group, so a long stretch on the splash isn't just one Clawd on loop.
+While the splash is up, the middle (PWR) button cycles animations. **Hold
+the power button for 3 seconds, then release, to put the device into
+pairing mode** — this clears the saved Bluetooth bond and re-advertises.
+The firmware also auto-rotates animations every 20 s within the current
+usage-rate group, so a long stretch on the splash isn't just one Clawd on
+loop.
 
 ## Hardware
 
@@ -252,9 +341,24 @@ sim`, then `cd firmware && .pio/build/sim/program`). See
 
 ## Credits
 
-- Pixel-art Clawd animations are Anthropic's official mascot art (claude.ai/code, Claude Code desktop), archived and converted by the tooling in `tools/` and `research/clawd-official/`.
-- Lucide icon set ([lucide.dev](https://lucide.dev), MIT) for bluetooth and battery UI glyphs.
-- Anthropic brand fonts (Tiempos Text, Styrene B) — see licensing warning below.
+- **Tip jar** — if ClawdDeck makes your desk happier:
+  [buymeacoffee.com/growingcatb](https://buymeacoffee.com/growingcatb) ☕
+- **Clawdmeter** — ClawdDeck is a fork of
+  [HermannBjorgvin/Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter)
+  by Hermann Björgvin Haraldsson. The usage-meter concept, the BLE protocol,
+  the daemon fleet, the board-port family and the splash-animation system
+  all come from that project; Clawdmeter remains a first-class app inside
+  ClawdDeck (the launcher's first tile). All the earlier commits in this
+  repo's history are his work.
+- The macOS host pieces — Python daemon, LaunchAgent and flash helper —
+  were ported by [Chris Davidson (@lorddavidson)](https://github.com/lorddavidson).
+- Pixel-art Clawd animations are Anthropic's official mascot art
+  (claude.ai/code, Claude Code desktop), archived and converted by the
+  tooling in `tools/` and `research/clawd-official/`.
+- **Inter** and **Phosphor** fonts (SIL OFL / MIT) for the ClawdDeck UI type
+  stack; Lucide (MIT) for the utility glyphs.
+- Anthropic brand fonts (Tiempos Text, Styrene B) — see the licensing note
+  below.
 
 ## Licensing gray area warning
 

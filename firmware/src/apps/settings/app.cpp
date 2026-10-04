@@ -1,11 +1,16 @@
 #include "../../shell/app.h"
+#include "../../shell/shell.h"
 #include "../../shell/statusbar.h"
 #include "../../theme.h"
 #include "../../phosphor_cp.h"
 #include "../../brightness.h"
 #include "../../ble.h"
 #include "../../hal/board_caps.h"
+#include "hal/power_hal.h"
+#include <Arduino.h>
 
+LV_FONT_DECLARE(font_inter_32);
+LV_FONT_DECLARE(font_inter_24);
 LV_FONT_DECLARE(font_inter_20);
 LV_FONT_DECLARE(font_inter_16);
 LV_FONT_DECLARE(font_inter_14);
@@ -49,6 +54,105 @@ static void set_unpair_text(void) {
     lv_obj_set_style_text_color(unpair_lbl, armed ? THEME_RED : lv_color_hex(0xFF453A), 0);
 }
 
+// ---- Device telemetry (real numbers from the runtime) --------------------
+// Hardware: Arduino's ESP object (real sketch/flash + heap numbers). The sim
+// has no ESP32 runtime: display plausible statics so the screen lays out the
+// same way it will on the board.
+static void storage_text(char* out, size_t n) {
+#ifdef BOARD_SIM
+    snprintf(out, n, "18%% of 2048KB");
+#else
+    const uint32_t used = ESP.getSketchSize();
+    const uint32_t free_space = ESP.getFreeSketchSpace();
+    const uint32_t total = used + free_space;
+    const int pct = total ? (int)((used * 100 + total / 2) / total) : 0;
+    snprintf(out, n, "%d%% of %uKB", pct, (unsigned)(total / 1024));
+#endif
+}
+static void ram_text(char* out, size_t n) {
+#ifdef BOARD_SIM
+    snprintf(out, n, "31%% / 412KB free");
+#else
+    const uint32_t total = ESP.getHeapSize();
+    const uint32_t free_h = ESP.getFreeHeap();
+    const int pct = total ? (int)(((total - free_h) * 100 + total / 2) / total) : 0;
+#ifdef BOARD_HAS_PSRAM
+    snprintf(out, n, "%d%% / %uKB RAM free", pct, (unsigned)(free_h / 1024));
+#else
+    snprintf(out, n, "%d%% / %uKB free", pct, (unsigned)(free_h / 1024));
+#endif
+#endif
+}
+
+// ---- Actions (close background apps / restart / power off) ---------------
+// One-shot destructive-ish actions arm on the FIRST tap ("Tap again to
+// confirm", Apple's two-step destructive pattern) and fire on the second
+// tap inside the window; the window times out back to the base label.
+static lv_obj_t*    armed_lbl_[2]  = {nullptr, nullptr};
+static const char*  armed_base_[2] = {nullptr, nullptr};
+static uint32_t     armed_at_[2]   = {0, 0};
+static int          armed_slot     = 0;
+
+static void set_armed_text(void) {
+    for (int i = 0; i < 2; i++) {
+        if (!armed_lbl_[i] || !armed_base_[i]) continue;
+        lv_label_set_text(armed_lbl_[i], armed_at_[i] ? "Tap again to confirm"
+                                                      : armed_base_[i]);
+        lv_obj_set_style_text_color(armed_lbl_[i],
+                                    armed_at_[i] ? THEME_RED : THEME_TEXT, 0);
+    }
+}
+template <typename F>
+static void armed_action(int slot, F fire) {
+    if (armed_at_[slot] == 0) {
+        armed_at_[slot] = lv_tick_get();
+        set_armed_text();
+        return;
+    }
+    if (lv_tick_elaps(armed_at_[slot]) >= CONFIRM_WINDOW_MS) {
+        armed_at_[slot] = lv_tick_get();   // stale press: re-arm
+        set_armed_text();
+        return;
+    }
+    armed_at_[slot] = 0;
+    set_armed_text();
+    fire();   // confirmed — never returns for off/restart
+}
+static void restart_cb(lv_event_t* e) {
+    (void)e;
+    armed_action(0, []() { power_hal_restart(); });
+}
+static void poweroff_cb(lv_event_t* e) {
+    (void)e;
+    armed_action(1, []() { power_hal_power_off(); });
+}
+
+// ---- Actions (close background apps / restart / power off) ---------------
+static lv_obj_t* kill_lbl    = nullptr;
+static lv_obj_t* batt_lbl    = nullptr;
+static int       batt_pct    = -1;
+static bool      batt_chg    = false;
+static void set_battery_text(void) {
+    if (!batt_lbl) return;
+    if (batt_pct < 0) {
+        lv_label_set_text(batt_lbl, "USB / unknown");
+        return;
+    }
+    lv_label_set_text_fmt(batt_lbl, batt_chg ? "%d%% / charging" : "%d%%", batt_pct);
+}
+static void set_kill_text(void) {
+    if (!kill_lbl) return;
+    const int n = shell_background_count();
+    lv_label_set_text_fmt(kill_lbl, "Close background apps (%d)", n);
+}
+static void kill_cb(lv_event_t* e) {
+    (void)e;
+    shell_kill_background();
+    set_kill_text();
+}
+
+
+
 static void brightness_cb(lv_event_t* e) {
     (void)e;
     brightness_cycle();
@@ -82,7 +186,7 @@ static lv_obj_t* make_text(lv_obj_t* parent, const char* txt,
 // free; LVGL 9.2 flex + these shapes deadlocked in allocate_item, gdb-proven).
 static lv_obj_t* make_glass_group(lv_obj_t* list, const char** rows, int n,
                                   lv_obj_t** out_vals) {
-    const int line_h = 50;                 // slightly tighter inside groups
+    const int line_h = 58;                 // slightly tighter inside groups
     lv_obj_t* card = lv_obj_create(list);
     lv_obj_set_width(card, lv_pct(100));
     lv_obj_set_height(card, n * line_h + 6);
@@ -133,10 +237,10 @@ static lv_obj_t* make_glass_group(lv_obj_t* list, const char** rows, int n,
             lv_obj_clear_flag(strip, LV_OBJ_FLAG_CLICKABLE);
         }
         const int pad = 16;
-        lv_obj_t* name = make_text(line, rows[2 * i], &font_inter_20, LV_OPA_COVER);
+        lv_obj_t* name = make_text(line, rows[2 * i], &font_inter_24, LV_OPA_COVER);
         lv_obj_set_style_text_color(name, THEME_TEXT, 0);
         lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
-        lv_obj_t* val = make_text(line, rows[2 * i + 1], &font_inter_20, 170);
+        lv_obj_t* val = make_text(line, rows[2 * i + 1], &font_inter_24, 120);
         lv_obj_set_style_text_color(val, THEME_DIM, 0);
         lv_obj_align(val, LV_ALIGN_RIGHT_MID, 0, 0);
         if (out_vals) out_vals[i] = val;
@@ -174,7 +278,7 @@ static lv_obj_t* make_row(lv_obj_t* list, const char* label, const char* value,
     lv_obj_set_style_shadow_opa(row, 25, 0);
     lv_obj_set_style_bg_opa(row, 230, LV_STATE_PRESSED);
     lv_obj_set_style_pad_hor(row, 16, 0);
-    lv_obj_set_style_pad_ver(row, 14, 0);
+    lv_obj_set_style_pad_ver(row, 16, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
     if (cb) {
@@ -187,7 +291,7 @@ static lv_obj_t* make_row(lv_obj_t* list, const char* label, const char* value,
 
     lv_obj_t* name = lv_label_create(row);
     lv_label_set_text(name, label);
-    lv_obj_set_style_text_font(name, &font_inter_20, 0);
+    lv_obj_set_style_text_font(name, &font_inter_24, 0);
     lv_obj_set_style_text_color(name, THEME_TEXT, 0);
     lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
 
@@ -195,16 +299,54 @@ static lv_obj_t* make_row(lv_obj_t* list, const char* label, const char* value,
 
     lv_obj_t* val = lv_label_create(row);
     lv_label_set_text(val, value);
-    lv_obj_set_style_text_font(val, &font_inter_16, 0);
+    lv_obj_set_style_text_font(val, &font_inter_24, 0);
     lv_obj_set_style_text_color(val, THEME_DIM, 0);
     lv_obj_align(val, LV_ALIGN_RIGHT_MID, 0, 0);
     return val;
 }
 
+// An action row — the glass row card with a centered label (destructive-
+// adjacent actions and one-shot controls use it; the danger color rides the
+// label if set by the caller).
+static lv_obj_t* make_row_action(lv_obj_t* list, const char* label, lv_event_cb_t cb) {
+    lv_obj_t* row = lv_obj_create(list);
+    lv_obj_set_width(row, lv_pct(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(row, SHEEN_TINT, 0);
+    lv_obj_set_style_bg_opa(row, 110, 0);
+    lv_obj_set_style_bg_grad_color(row, THEME_BG, 0);
+    lv_obj_set_style_bg_grad_opa(row, 120, 0);
+    lv_obj_set_style_bg_grad_dir(row, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_main_stop(row, 0, 0);
+    lv_obj_set_style_bg_grad_stop(row, 255, 0);
+    lv_obj_set_style_radius(row, 16, 0);
+    lv_obj_set_style_border_color(row, RIM_CREAM, 0);
+    lv_obj_set_style_border_width(row, 1, 0);
+    lv_obj_set_style_border_opa(row, 120, 0);
+    lv_obj_set_style_shadow_color(row, GLASS_SHADOW, 0);
+    lv_obj_set_style_shadow_width(row, 12, 0);
+    lv_obj_set_style_shadow_ofs_y(row, 4, 0);
+    lv_obj_set_style_shadow_opa(row, 22, 0);
+    lv_obj_set_style_pad_hor(row, 16, 0);
+    lv_obj_set_style_pad_ver(row, 16, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_opa(row, 200, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(row, cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t* l = lv_label_create(row);
+    lv_label_set_text(l, label);
+    lv_obj_set_style_text_font(l, &font_inter_24, 0);
+    lv_obj_set_style_text_color(l, THEME_TEXT, 0);
+    lv_obj_set_width(l, lv_pct(100));
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(l, LV_ALIGN_CENTER, 0, 0);
+    return l;
+}
+
 static void make_header(lv_obj_t* list, const char* text) {
     lv_obj_t* h = lv_label_create(list);
     lv_label_set_text(h, text);
-    lv_obj_set_style_text_font(h, &font_inter_14, 0);
+    lv_obj_set_style_text_font(h, &font_inter_16, 0);
     lv_obj_set_style_text_color(h, THEME_DIM, 0);
     lv_obj_set_style_text_letter_space(h, 2, 0);
     lv_obj_set_style_pad_top(h, 6, 0);
@@ -258,8 +400,14 @@ static void settings_create(lv_obj_t* root) {
     // glass card; the danger = the red centered label alone.
     lv_obj_set_width(unpair, lv_pct(100));
     lv_obj_set_height(unpair, LV_SIZE_CONTENT);
+    // r5 nit: identical cell tone within the card set.
     lv_obj_set_style_bg_color(unpair, SHEEN_TINT, 0);
-    lv_obj_set_style_bg_opa(unpair, 200, 0);
+    lv_obj_set_style_bg_opa(unpair, 110, 0);
+    lv_obj_set_style_bg_grad_color(unpair, THEME_BG, 0);
+    lv_obj_set_style_bg_grad_opa(unpair, 120, 0);
+    lv_obj_set_style_bg_grad_dir(unpair, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_main_stop(unpair, 0, 0);
+    lv_obj_set_style_bg_grad_stop(unpair, 255, 0);
     lv_obj_set_style_radius(unpair, 16, 0);
     lv_obj_set_style_border_color(unpair, RIM_CREAM, 0);
     lv_obj_set_style_border_width(unpair, 1, 0);
@@ -269,14 +417,14 @@ static void settings_create(lv_obj_t* root) {
     lv_obj_set_style_shadow_ofs_y(unpair, 4, 0);
     lv_obj_set_style_shadow_opa(unpair, 22, 0);
     lv_obj_set_style_pad_hor(unpair, 16, 0);
-    lv_obj_set_style_pad_ver(unpair, 14, 0);
+    lv_obj_set_style_pad_ver(unpair, 16, 0);
     lv_obj_clear_flag(unpair, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(unpair, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_opa(unpair, 230, LV_STATE_PRESSED);
     lv_obj_add_event_cb(unpair, unpair_cb, LV_EVENT_CLICKED, NULL);
 
     unpair_lbl = lv_label_create(unpair);
-    lv_obj_set_style_text_font(unpair_lbl, &font_inter_20, 0);
+    lv_obj_set_style_text_font(unpair_lbl, &font_inter_24, 0);
     lv_obj_set_width(unpair_lbl, lv_pct(100));
     lv_obj_set_style_text_align(unpair_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(unpair_lbl, LV_ALIGN_CENTER, 0, 0);
@@ -290,23 +438,110 @@ static void settings_create(lv_obj_t* root) {
     make_glass_group(list, about_rows, 2, about_vals);
     lv_label_set_text(about_vals[0], c.name);
     lv_label_set_text(about_vals[1], res);
+
+    // ---- Device: the real numbers (flash usage, RAM) ----------------------
+    make_header(list, "Device");
+    char st_txt[34];
+    storage_text(st_txt, sizeof(st_txt));
+    char ram_txt[34];
+    ram_text(ram_txt, sizeof(ram_txt));
+    static const char* dev_rows[] = {"Storage", "", "Memory", "", "Battery", ""};
+    lv_obj_t* dev_vals[3];
+    make_glass_group(list, dev_rows, 3, dev_vals);
+    lv_label_set_text(dev_vals[0], st_txt);
+    lv_label_set_text(dev_vals[1], ram_txt);
+    batt_lbl = dev_vals[2];
+    set_battery_text();
+
+    // ---- Actions: close bg apps, restart, power off -----------------------
+    make_header(list, "Actions");
+    lv_obj_t* kill_row = lv_obj_create(list);
+    lv_obj_set_width(kill_row, lv_pct(100));
+    lv_obj_set_height(kill_row, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(kill_row, SHEEN_TINT, 0);
+    lv_obj_set_style_bg_opa(kill_row, 170, 0);
+    lv_obj_set_style_bg_grad_color(kill_row, THEME_BG, 0);
+    lv_obj_set_style_bg_grad_opa(kill_row, 95, 0);
+    lv_obj_set_style_bg_grad_dir(kill_row, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_main_stop(kill_row, 0, 0);
+    lv_obj_set_style_bg_grad_stop(kill_row, 255, 0);
+    lv_obj_set_style_radius(kill_row, 16, 0);
+    lv_obj_set_style_border_color(kill_row, RIM_CREAM, 0);
+    lv_obj_set_style_border_width(kill_row, 1, 0);
+    lv_obj_set_style_border_opa(kill_row, 160, 0);
+    lv_obj_set_style_outline_color(kill_row, RIM_DARK, 0);
+    lv_obj_set_style_outline_width(kill_row, 1, 0);
+    lv_obj_set_style_outline_opa(kill_row, 90, 0);
+    lv_obj_set_style_shadow_color(kill_row, GLASS_SHADOW, 0);
+    lv_obj_set_style_shadow_width(kill_row, 14, 0);
+    lv_obj_set_style_shadow_ofs_y(kill_row, 5, 0);
+    lv_obj_set_style_shadow_opa(kill_row, 25, 0);
+    lv_obj_set_style_pad_hor(kill_row, 16, 0);
+    lv_obj_set_style_pad_ver(kill_row, 16, 0);
+    lv_obj_clear_flag(kill_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(kill_row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_opa(kill_row, 230, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(kill_row, kill_cb, LV_EVENT_CLICKED, NULL);
+    kill_lbl = lv_label_create(kill_row);
+    lv_obj_set_style_text_font(kill_lbl, &font_inter_24, 0);
+    lv_obj_set_style_text_color(kill_lbl, THEME_TEXT, 0);
+    lv_obj_align(kill_lbl, LV_ALIGN_LEFT_MID, 0, 0);
+    set_kill_text();
+
+    // One-shot actions arm on the first tap (two-step destructive pattern —
+    // a stray double-press of Restart/Power off must not brick the session).
+    lv_obj_t* restart_lbl = make_row_action(list, "Restart", restart_cb);
+    armed_lbl_[0]  = restart_lbl;
+    armed_base_[0] = "Restart";
+    lv_obj_t* off_lbl = make_row_action(list, "Power off", poweroff_cb);
+    armed_lbl_[1]  = off_lbl;
+    armed_base_[1] = "Power off";
+
     lv_obj_scroll_to_y(list, 0, LV_ANIM_OFF);
 }
 
 static void settings_destroy(void) {
     // The shell deletes the root, taking the widgets with it; drop the
     // cached pointers so a later tick can't touch freed objects.
-    bright_val = nullptr;
-    bond_val   = nullptr;
-    unpair_lbl = nullptr;
+    bright_val   = nullptr;
+    bond_val     = nullptr;
+    unpair_lbl   = nullptr;
+    kill_lbl     = nullptr;
+    batt_lbl     = nullptr;
+    armed_lbl_[0] = armed_lbl_[1] = nullptr;
+    armed_base_[0] = armed_base_[1] = nullptr;
+    armed_at_[0] = armed_at_[1] = 0;
     confirm_at = 0;
 }
 
 static void settings_tick(void) {
+    // Live battery row (cheap poll; the label only rewrites on change).
+    const int pct = power_hal_battery_pct();
+    const bool chg = power_hal_is_charging();
+    if (pct != batt_pct || chg != batt_chg) {
+        batt_pct = pct;
+        batt_chg = chg;
+        set_battery_text();
+    }
+    for (int arm = 0; arm < 2; arm++) {
+        const uint32_t armed_at = armed_at_[arm];
+        if (armed_at == 0) continue;
+        if (lv_tick_elaps(armed_at) < CONFIRM_WINDOW_MS) continue;
+        armed_at_[arm] = 0;
+        armed_lbl_[arm] = nullptr;
+        armed_base_[arm] = nullptr;
+        set_armed_text();
+    }
     if (confirm_at == 0) return;
     if (lv_tick_elaps(confirm_at) < CONFIRM_WINDOW_MS) return;
     confirm_at = 0;
     set_unpair_text();
+}
+
+static void settings_on_battery(int percent, bool charging) {
+    batt_pct = percent;
+    batt_chg = charging;
+    set_battery_text();
 }
 
 static void settings_on_ble(ble_state_t state) {
@@ -324,5 +559,5 @@ extern const AppDef app_settings = {
     .persistent = false, .immersive = false,
     .create = settings_create, .destroy = settings_destroy,
     .tick = settings_tick, .on_button = nullptr,
-    .on_usage = nullptr, .on_ble = settings_on_ble, .on_battery = nullptr,
+    .on_usage = nullptr, .on_ble = settings_on_ble, .on_battery = settings_on_battery,
 };

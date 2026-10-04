@@ -1,5 +1,6 @@
 #include "launcher.h"
 #include "shell.h"
+#include "draw/snapshot/lv_snapshot.h"
 #include "statusbar.h"
 #include "../theme.h"
 #include "../hal/board_caps.h"
@@ -13,6 +14,8 @@ LV_FONT_DECLARE(font_inter_14);
 LV_FONT_DECLARE(font_phos_40);
 LV_FONT_DECLARE(font_phos_28);
 LV_FONT_DECLARE(font_phos_20);
+LV_FONT_DECLARE(font_phos_fill_96);
+LV_FONT_DECLARE(font_phos_fill_64);
 
 // Space kept clear at the bottom for the page dots and the home pill.
 #define LAUNCHER_FOOT_H 34
@@ -70,8 +73,9 @@ static void compute_layout(const BoardCaps& c) {
     G.radius    = G.tile * 28 / 100 + 2;
     G.label_gap = (G.tile >= 80) ? 10 : 4;
 
-    G.glyph_font = (G.tile >= 150) ? &font_phos_40
-                 : (G.tile >=  88) ? &font_phos_40
+    // Launcher tiles = the iOS app-icon class: the Phosphor-FILL glyph family.
+    G.glyph_font = (G.tile >= 150) ? &font_phos_fill_96
+                 : (G.tile >=  88) ? &font_phos_fill_64
                  : (G.tile >=  60) ? &font_phos_28
                                    : &font_phos_20;
     // Apple-grade label type: Inter (SIL OFL, SF lookalike) replaces the
@@ -224,75 +228,131 @@ static lv_color_t wall_base_at(int row) {
                       : lv_color_mix(THEME_BG_BOT, THEME_BG_TOP, 55);
 }
 
-static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius, int row) {
-    const lv_color_t hue  = lv_color_hex(d->tile_rgb);
-    const lv_color_t wall = wall_base_at(row);   // backdrop light behind glass
+// ---- iOS-class app icon ramps (the factory-desktop look) --------------------
+// The reference home screen: opaque squircles, saturated two-stop gradients,
+// white FPhosphor fill glyphs (dark ink on the silver tile only).
+struct IconRamp { uint32_t rgb; uint32_t cap; uint32_t pool; bool dark_ink; };
+static const IconRamp ICON_RAMPS[] = {
+    { 0xb85739, 0xFF9F6E, 0xE25822, false },  // clawdmeter   — ember
+    { 0x5f8f46, 0x7BD96C, 0x2F9E44, false },  // voice        — green
+    { 0x7256b8, 0xB98EF2, 0x7B3FE4, false },  // sessions     — purple
+    { 0x2b5b6e, 0x6FC3E8, 0x1673A9, false },  // clock        — blue
+    { 0x8a4bc4, 0xD98EF5, 0x8B3DDE, false },  // SpecAnalyzer — violet
+    { 0x3953c8, 0x7FA8FF, 0x2D5BE8, false },  // level        — royal blue
+    { 0x7a4b6b, 0xE8A7C3, 0xC2558C, false },  // host         — plum-rose
+    { 0xf2f2f7, 0xF7F7FA, 0xC9C9D1, true  },  // settings     — silver, dark ink
+};
+static const IconRamp* icon_ramp_for(uint32_t rgb) {
+    for (auto& r : ICON_RAMPS) if (r.rgb == rgb) return &r;
+    return &ICON_RAMPS[0];
+}
+static lv_color_t icon_glyph_color_of(const AppDef* d) {
+    const IconRamp* r = icon_ramp_for(d->tile_rgb);
+    return r->dark_ink ? lv_color_make(0x3a, 0x3a, 0x40)
+                       : lv_color_make(0xFF, 0xFF, 0xFF);
+}
 
-    // Body — LIFT model (critic r5: Apple glass brightens what's behind it;
-    // dark-tint-over-backdrop is the 2020-Android tell). The fill is the
-    // wallpaper's own light ADDED-TO: brightened wall (the slab's inner
-    // luminance) with the hue as a color cast, not a darkener. Cap stop =
-    // wall lifted hard toward cream (light entering); pool stop = wall
-    // lifted toward hue (light gathering in color). Opas moderate: bright
-    // color doing the work, not coverage.
-    // Chroma-dominant ramp (r7: luma-only ramps quantize into plateaus on
-    // 16bpp): top = cream-lit, clearly LOWER saturation; pool = saturated hue
-    // at similar luma. The eye reads a smooth HUE flow — the 5-bit luma
-    // quantization rides along inaudibly instead of showing plateaus.
-    const lv_color_t top_c = lv_color_mix(wall, RIM_CREAM, 40);
-    lv_obj_set_style_bg_color(icon,
-        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 165), 0);
-    lv_obj_set_style_bg_opa(icon, 145, 0);
-    lv_obj_set_style_bg_grad_color(icon,
-        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 12), hue, 82), 0);
-    lv_obj_set_style_bg_grad_opa(icon, 185, 0);
+// ---- iOS-class tile (the factory-desktop icon look) --------------------------
+// Opaque squircle app icon: saturated two-stop ramp (bright cap → deep pool,
+// same hue), the soft internal top-light, a hairline dark contour + a puddle
+// shadow for seating on the photo. The glyph = a WHITE Phosphor-FILL icon
+// (dark ink on the silver tile only) — the caller owns it. Pressed = the
+// baked DIMMED variant (radius<0 sentinel so one recipe serves both bakes).
+static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius, int row) {
+    const IconRamp* ramp = icon_ramp_for(d->tile_rgb);
+    const lv_color_t cap  = lv_color_hex(ramp->cap);
+    const lv_color_t pool = lv_color_hex(ramp->pool);
+    const bool dim = (radius < 0);
+
+    // Opaque body: bright cap → deep pool, chroma-dominant (the 16bpp
+    // quantization rides the hue flow, not luma plateaus).
+    lv_obj_set_style_bg_color(icon, cap, 0);
+    lv_obj_set_style_bg_grad_color(icon, pool, 0);
+    lv_obj_set_style_bg_opa(icon, dim ? LV_OPA_40 : LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_grad_opa(icon, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_grad_dir(icon, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(icon, 0, 0);
-    lv_obj_set_style_bg_grad_stop(icon, 240, 0);
+    lv_obj_set_style_bg_grad_stop(icon, 235, 0);
 
-    // Drop shadow: soft puddle straight down (attempt-2 tuned: light).
+    // Seating: a soft puddle + a 1px darkened contour. No cream rim, no glass
+    // glint children — the icon is self-lit, the app-icon class.
     lv_obj_set_style_shadow_color(icon, GLASS_SHADOW, 0);
-    lv_obj_set_style_shadow_width(icon, 14, 0);
+    lv_obj_set_style_shadow_width(icon, 16, 0);
     lv_obj_set_style_shadow_spread(icon, 0, 0);
-    lv_obj_set_style_shadow_ofs_y(icon, 5, 0);
-    lv_obj_set_style_shadow_opa(icon, 25, 0);
+    lv_obj_set_style_shadow_ofs_y(icon, 6, 0);
+    lv_obj_set_style_shadow_opa(icon, dim ? 45 : 70, 0);
+    lv_obj_set_style_border_color(icon, lv_color_mix(pool, lv_color_hex(0x000000), 55), 0);
+    lv_obj_set_style_border_width(icon, 1, 0);
+    lv_obj_set_style_border_opa(icon, 110, 0);
 
-    // Directional rim (critic r2: uniform outline reads plastic): light comes
-    // from above — cream glint on the TOP arc only, faint warm sides, none at
-    // the base (the shadow side), plus the dark outer contour for seating.
-    // Light comes from above: warm cream rim, but the glint sits on the
-    // top arc — a clipped top-half highlight child gives the directional
-    // glint the uniform border can't (critic r2).
-    lv_obj_set_style_border_color(icon, RIM_CREAM, 0);
-    lv_obj_set_style_border_width(icon, 2, 0);
-    lv_obj_set_style_border_opa(icon, 95, 0);
-    lv_obj_t* glint = lv_obj_create(icon);
-    lv_obj_set_size(glint, lv_obj_get_width(icon) - 24, (lv_obj_get_height(icon) / 2) - 12);
-    lv_obj_align(glint, LV_ALIGN_TOP_MID, 0, 8);
-    lv_obj_set_style_bg_color(glint, lv_color_mix(RIM_CREAM, lv_color_hex(0xfff6ea), 50), 0);
-    lv_obj_set_style_bg_grad_color(glint, RIM_CREAM, 0);
-    lv_obj_set_style_bg_grad_dir(glint, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_opa(glint, 78, 0);
-    lv_obj_set_style_bg_grad_opa(glint, 0, 0);
-    lv_obj_set_style_bg_main_stop(glint, 0, 0);
-    lv_obj_set_style_bg_grad_stop(glint, 255, 0);
-    lv_obj_set_size(glint, lv_obj_get_width(icon) - 28, (lv_obj_get_height(icon) * 5) / 8 - 14);
-    lv_obj_set_style_radius(glint, (lv_obj_get_height(glint)) / 2, 0);
-    lv_obj_set_style_border_width(glint, 0, 0);
-    lv_obj_set_style_pad_all(glint, 0, 0);
-    lv_obj_clear_flag(glint, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(glint, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(glint, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_set_style_clip_corner(glint, true, 0);
-    lv_obj_set_style_outline_color(icon, GLASS_SHADOW, 0);
-    lv_obj_set_style_outline_width(icon, 1, 0);
-    lv_obj_set_style_outline_pad(icon, 0, 0);
-    lv_obj_set_style_outline_opa(icon, 90, 0);
+    // Internal top-light: one clipped white rounded rect over the upper half
+    // (the iOS icons' inherent upper luminance).
+    const int w = lv_obj_get_width(icon), h = lv_obj_get_height(icon);
+    lv_obj_t* light = lv_obj_create(icon);
+    lv_obj_set_size(light, w - 16, h / 2);
+    lv_obj_align(light, LV_ALIGN_TOP_MID, 0, 4);
+    lv_obj_set_style_bg_color(light, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_bg_opa(light, dim ? 18 : 42, 0);
+    lv_obj_set_style_radius(light, (w - 16) / 2, 0);
+    lv_obj_set_style_border_width(light, 0, 0);
+    lv_obj_set_style_pad_all(light, 0, 0);
+    lv_obj_set_style_clip_corner(light, true, 0);
+    lv_obj_clear_flag(light, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(light, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(light, LV_OBJ_FLAG_IGNORE_LAYOUT);
+}
 
-    // Press feedback: brighten the glass and deepen the puddle — pressed
-    // glass feels thicker, not dimmer.
-    lv_obj_set_style_bg_opa(icon, 190, LV_STATE_PRESSED);
-    lv_obj_set_style_shadow_opa(icon, 60, LV_STATE_PRESSED);
+// (The round-3 tile bake was retired: the iOS icons = opaque + cheap, so
+// the bake's snapshot machinery no longer pays for itself — and its halo
+// composited seams over the photo. The live render = a few blits/strip.)
+struct TileBake { lv_draw_buf_t* rest; lv_draw_buf_t* down; };
+
+static void tile_press_swap_cb(lv_event_t* e) {
+    lv_obj_t* img = (lv_obj_t*)lv_event_get_target(e);
+    TileBake* b = (TileBake*)lv_obj_get_user_data(img);
+    if (!b) return;
+    lv_image_set_src(img, (const lv_image_dsc_t*)
+        (lv_event_get_code(e) == LV_EVENT_PRESSED ? b->down : b->rest));
+}
+
+// ---- Icon bake (round 2: the swipe needs blits) -----------------------------
+// The live icons render ~3x the baked cost per swipe frame in the sim bench
+// (3.97 vs 1.26 ms); at S3 scale that is the difference between butter and
+// chop. These are OPAQUE squircles — so the bake needs no wallpaper/halo at
+// all (that halo was the seam bug): snapshot the bare icon + glyph w/ the
+// PRESSED styles pre-applied for the dim variant.
+#define ICON_BX (lv_display_get_horizontal_resolution(NULL) + 10)   // parked
+#define ICON_BY 10                                                  // right of screen
+static lv_draw_buf_t* iconBake(lv_obj_t* parent, const AppDef* d, bool pressed) {
+    lv_obj_t* icon = lv_obj_create(lv_layer_top());  // scratch on the top
+    lv_obj_set_size(icon, G.tile, G.tile);           // layer: above the wall +
+    lv_obj_set_pos(icon, 0, 0);                      // the pages, AT (0,0) —
+                                                     // always renderable; the
+                                                     // snapshot happens during
+                                                     // init, pre-first-frame
+    glass_tile(icon, d, G.radius, 0);
+    lv_obj_set_style_radius(icon, G.radius, 0);
+    lv_obj_set_style_pad_all(icon, 0, 0);
+    lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(icon, pressed ? LV_OPA_40 : LV_OPA_COVER, 0);
+    lv_obj_set_style_shadow_opa(icon, 0, 0);   // no shadow in the bake: its
+    lv_obj_set_style_border_opa(icon, 40, 0);  // ext ring = the black gutters
+    lv_obj_set_style_shadow_width(icon, 0, 0);
+
+    lv_obj_t* glyph = lv_label_create(icon);
+    lv_label_set_text(glyph, d->glyph);
+    lv_obj_set_style_text_font(glyph, G.glyph_font, 0);
+    lv_obj_set_style_text_color(glyph, icon_glyph_color_of(d), 0);
+    lv_obj_set_style_text_opa(glyph, pressed ? 160 : 255, 0);
+    lv_obj_center(glyph);
+    lv_obj_set_style_text_letter_space(glyph, 0, 0);
+
+    lv_obj_update_layout(icon);
+    // ARGB8888: the snapshot's outside-the-radius corners = TRANSPARENT
+    // (the 565 snapshot = flattened them to black = the "black squares").
+    lv_draw_buf_t* buf = lv_snapshot_take(icon, LV_COLOR_FORMAT_ARGB8888);
+    lv_obj_delete(icon);
+    return buf;
 }
 
 static void make_tile(lv_obj_t* page, int slot, int app_index) {
@@ -305,33 +365,67 @@ static void make_tile(lv_obj_t* page, int slot, int app_index) {
     const int cell_y = row * G.cell_h + (row ? G.row_gap : 0);
     const int icon_x = cell_x + (G.cell_w - G.tile) / 2;
 
-    lv_obj_t* icon = lv_obj_create(page);
-    lv_obj_set_size(icon, G.tile, G.tile);
-    lv_obj_set_pos(icon, icon_x, cell_y);
-    glass_tile(icon, d, G.radius, row);
-    lv_obj_set_style_radius(icon, G.radius, 0);
-    lv_obj_set_style_pad_all(icon, 0, 0);
-    lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(icon, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(icon, tile_clicked_cb, LV_EVENT_CLICKED,
-                        (void*)(intptr_t)app_index);
+    // The icon = a pre-baked OPAQUE bitmap (no halo, no backdrop, no glass:
+    // the squircle = self-contained; the photo = behind it, untouched).
+    // Sim bench: the live icons = 3.97 ms/frame vs the baked = 1.26 → at S3
+    // scale the baked path = the butter story.
+    static TileBake bakes[16];
+    const int bi = app_index & 15;
+    bakes[bi].rest = iconBake(page, d, false);
+    bakes[bi].down = iconBake(page, d, true);
+    if (bakes[bi].rest && bakes[bi].down) {
+        lv_obj_t* icon = lv_image_create(page);
+        lv_obj_set_pos(icon, icon_x, cell_y);   // buf = 145² = the icon exactly
+        lv_image_set_src(icon, (const lv_image_dsc_t*)bakes[bi].rest);
+        lv_obj_set_style_bg_opa(icon, LV_OPA_TRANSP, 0);   // lv_image = an lv_obj:
+                                                           // its default dark bg
+                                                           // painted the boxes
+        lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(icon, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(icon, tile_clicked_cb, LV_EVENT_CLICKED,
+                            (void*)(intptr_t)app_index);
+        lv_obj_add_event_cb(icon, tile_press_swap_cb, LV_EVENT_PRESSED, NULL);
+        lv_obj_add_event_cb(icon, tile_press_swap_cb, LV_EVENT_RELEASED, NULL);
+        lv_obj_add_event_cb(icon, tile_press_swap_cb, LV_EVENT_PRESS_LOST, NULL);
+        lv_obj_set_user_data(icon, &bakes[bi]);
+    } else {
+        // Snapshot unavailable: the live icon (the same recipe + the dim).
+        if (bakes[bi].rest)  lv_draw_buf_destroy(bakes[bi].rest);
+        if (bakes[bi].down)  lv_draw_buf_destroy(bakes[bi].down);
+        lv_obj_t* icon = lv_obj_create(page);
+        lv_obj_set_size(icon, G.tile, G.tile);
+        lv_obj_set_pos(icon, icon_x, cell_y);
+        glass_tile(icon, d, G.radius, row);
+        lv_obj_set_style_radius(icon, G.radius, 0);
+        lv_obj_set_style_pad_all(icon, 0, 0);
+        lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(icon, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(icon, tile_clicked_cb, LV_EVENT_CLICKED,
+                            (void*)(intptr_t)app_index);
+        lv_obj_set_style_bg_opa(icon, LV_OPA_40, LV_STATE_PRESSED);
 
-    // Glyph: Apple-style dark ink on the light glass (thin-line Phosphor
-    // replaces the stock montserrat symbols). Depth comes from the glass,
-    // not from overlay bands over it (attempt-1's dark glyph-floor strip
-    // banded the tile middles — deleted).
-    lv_obj_t* glyph = lv_label_create(icon);
-    lv_label_set_text(glyph, d->glyph);
-    lv_obj_set_style_text_font(glyph, G.glyph_font, 0);
-    lv_obj_set_style_text_color(glyph, THEME_INK, 0);
-    lv_obj_set_style_text_opa(glyph, 235, 0);
-    lv_obj_center(glyph);
-    lv_obj_set_style_text_letter_space(glyph, 0, 0);
+        lv_obj_t* glyph = lv_label_create(icon);
+        lv_label_set_text(glyph, d->glyph);
+        lv_obj_set_style_text_font(glyph, G.glyph_font, 0);
+        lv_obj_set_style_text_color(glyph, icon_glyph_color_of(d), 0);
+        lv_obj_center(glyph);
+    }
+
+    // iOS label anatomy: white text + a 2px dark ghost (read over anything).
+    lv_obj_t* ghost = lv_label_create(page);
+    lv_label_set_text(ghost, d->title);
+    lv_obj_set_style_text_font(ghost, G.label_font, 0);
+    lv_obj_set_style_text_color(ghost, lv_color_hex(0x1a2612), 0);
+    lv_obj_set_style_text_opa(ghost, 150, 0);
+    lv_obj_set_width(ghost, G.cell_w);
+    lv_obj_set_style_text_align(ghost, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(ghost, LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(ghost, cell_x, cell_y + G.tile + G.label_gap + 2);
 
     lv_obj_t* label = lv_label_create(page);
     lv_label_set_text(label, d->title);
     lv_obj_set_style_text_font(label, G.label_font, 0);
-    lv_obj_set_style_text_color(label, THEME_TEXT, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(0xffffff), 0);
     lv_obj_set_width(label, G.cell_w);
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
@@ -355,6 +449,47 @@ static void scroll_cb(lv_event_t* e) {
     refresh_dots();
 }
 
+// ---- Swipe bench (sim diagnostics only) ------------------------------------
+// Drives a scripted horizontal swipe (24px/frame for ~1s) and prints the
+// wall-clock per frame, so render-cost changes measure directly in the sim.
+#ifdef BOARD_SIM
+#include <time.h>
+static lv_obj_t* bench_pages = nullptr;
+static int bench_frame = 0;
+static struct timespec bench_t0 = {0, 0};
+static uint64_t bench_ns_sum = 0;
+void launcher_bench_start(void);
+void launcher_bench_tick(void);
+void launcher_bench_start(void) {
+    bench_pages = pages;
+    bench_frame = 0;
+    bench_ns_sum = 0;
+    clock_gettime(CLOCK_MONOTONIC, &bench_t0);
+    Serial.println("[bench] swipe render bench: start");
+}
+void launcher_bench_tick(void) {
+    if (!bench_pages || bench_frame >= 40) {
+        if (bench_pages && bench_frame >= 40) {
+            Serial.printf("[bench] done: 40 frames, avg %.2f ms/frame\n",
+                          (double)bench_ns_sum / 40.0 / 1e6);
+            lv_obj_scroll_to_x(bench_pages, 0, LV_ANIM_OFF);
+            bench_pages = nullptr;
+        }
+        return;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &bench_t0);
+    lv_obj_scroll_by(bench_pages, -24, 0, LV_ANIM_OFF);
+    lv_refr_now(NULL);
+    struct timespec t1;
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    long long dt = (t1.tv_sec - bench_t0.tv_sec) * 1000000000LL
+                 + (t1.tv_nsec - bench_t0.tv_nsec);
+    if (bench_frame > 0) bench_ns_sum += dt;   // frame 0 = warmup
+    Serial.printf("[bench] f%02d %6.2f ms\n", bench_frame, dt / 1e6);
+    bench_frame++;
+}
+#endif // BOARD_SIM
+
 void launcher_init(lv_obj_t* parent) {
     compute_layout(board_caps());
     const int W = board_caps().width;
@@ -365,33 +500,19 @@ void launcher_init(lv_obj_t* parent) {
     lv_obj_set_pos(root, 0, 0);
     lv_obj_set_style_border_width(root, 0, 0);
     lv_obj_set_style_pad_all(root, 0, 0);
-    // Wallpaper: the full layer stack (duotone + washes + light dome) is
-    // built once into a throwaway container and snapshot-flattened to ONE
-    // opaque RGB565 image (lv_image). A horizontal swipe dirties the whole
-    // grid area every frame — re-blending ~10 gradient layers per strip per
-    // frame was the swipe cost; post-flatten the wall is a single blit.
-    // Verified pixel-identical to the live stack in the sim.
-    lv_obj_t* wall = lv_obj_create(root);
-    lv_obj_set_size(wall, W, H);
-    lv_obj_set_pos(wall, 0, 0);
-    lv_obj_set_style_border_width(wall, 0, 0);
-    lv_obj_set_style_pad_all(wall, 0, 0);
-    lv_obj_clear_flag(wall, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(wall, LV_OBJ_FLAG_CLICKABLE);
-    build_wallpaper(wall, W, H);
-    lv_obj_update_layout(wall);
-    lv_draw_buf_t* wall_flat = lv_snapshot_take(wall, LV_COLOR_FORMAT_RGB565);
-    lv_obj_delete(wall);
-    if (wall_flat) {
+    // Wallpaper: the Waveshare Lake-Quinault reference photo (the factory
+    // look the user asked for), baked as a 480x480 RGB565 asset — already
+    // ONE opaque image, so the round-1 snapshot flatten = unnecessary here;
+    // the duotone stack remains the fallback (sim/no-asset path).
+    // Tile bakes composite the wallpaper behind each slot, so the glass
+    // picks up the photo's light per-slot with no recipe changes.
+    {
+        extern const lv_image_dsc_t img_wall_photo;
         lv_obj_t* wall_img = lv_image_create(root);
-        lv_image_set_src(wall_img, (const lv_image_dsc_t*)wall_flat);
+        lv_image_set_src(wall_img, &img_wall_photo);
         lv_obj_set_pos(wall_img, 0, 0);
         lv_obj_clear_flag(wall_img, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_clear_flag(wall_img, LV_OBJ_FLAG_CLICKABLE);
-        // wall_flat stays allocated for the launcher's lifetime (PSRAM on
-        // hardware): ~W*H*2 bytes of RAM buys one-op swipes. Lean trade.
-    } else {
-        build_wallpaper(root, W, H);   // snapshot unsupported: keep live stack
     }
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 

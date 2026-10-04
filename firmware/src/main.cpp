@@ -17,6 +17,10 @@
 
 #include "hal/board_caps.h"
 #include "hal/display_hal.h"
+#ifdef BOARD_SIM
+void launcher_bench_start(void);
+void launcher_bench_tick(void);
+#endif
 #include "hal/touch_hal.h"
 #include "hal/input_hal.h"
 #include "hal/power_hal.h"
@@ -202,7 +206,10 @@ static void check_serial_cmd() {
             // can be scripted. `apps` lists the ids this board actually shows.
             else if (strcmp(cmd_buf, "home") == 0)  shell_go_home();
             else if (strncmp(cmd_buf, "open ", 5) == 0) shell_open_id(cmd_buf + 5);
-            else if (strcmp(cmd_buf, "apps") == 0) {
+        #ifdef BOARD_SIM
+    else if (strcmp(cmd_buf, "bench") == 0)  launcher_bench_start();
+#endif
+    else if (strcmp(cmd_buf, "apps") == 0) {
                 for (int i = 0; i < shell_app_count(); i++)
                     Serial.printf("%d %s\n", i, shell_app_at(i)->id);
             }
@@ -397,6 +404,9 @@ void loop() {
     idle_tick();
     lv_timer_handler();
     shell_tick();       // status bar + the foreground app's own tick
+#ifdef BOARD_SIM
+    launcher_bench_tick();
+#endif
     ble_tick();
     power_hal_tick();
     imu_hal_tick();

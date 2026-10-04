@@ -158,6 +158,28 @@ void shell_tick(void) {
     if (fg && fg->tick) fg->tick();
 }
 
+int shell_background_count(void) {
+    int n = 0;
+    for (int i = 0; i < visible_n; i++) {
+        if (roots[i] && !(fg && fg_index == i) && visible[i]->persistent) n++;
+    }
+    return n;
+}
+
+int shell_kill_background(void) {
+    int killed = 0;
+    for (int i = 0; i < visible_n; i++) {
+        if (!roots[i]) continue;             // nothing built (never opened)
+        if (fg && fg_index == i) continue;   // never kill the foreground
+        if (!visible[i]->persistent) continue; // non-persistent = already torn down on close
+        if (visible[i]->destroy) visible[i]->destroy();
+        lv_obj_delete(roots[i]);
+        roots[i] = nullptr;
+        killed++;
+    }
+    return killed;
+}
+
 void shell_open(int visible_index) {
     if (visible_index < 0 || visible_index >= visible_n) return;
     if (fg_index == visible_index) return;

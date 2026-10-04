@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 14 px
  * Bpp: 4
- * Opts: --font $HOME/.cache/gauntlet/inter/extras/ttf/Inter-Medium.ttf --size 14 --bpp 4 --no-compress -r 0x20-0x7E --format lvgl --lv-include lvgl.h -o font_inter_14.c --force-fast-kern-format
+ * Opts: --font ~/.cache/gauntlet/<local> --size 14 --bpp 4 --no-compress -r 0x20-0x7E --format lvgl --lv-include lvgl.h -o font_inter_14.c --force-fast-kern-format
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

@@ -6,22 +6,27 @@
 #include <stdio.h>
 #include <string.h>
 
-// Apple-grade status type: Inter Medium (SIL OFL; mirrors the old styrene_20)
-LV_FONT_DECLARE(font_inter_20);
+// Apple-grade status type: Inter Medium (SIL OFL) — 32px: the photo wall
+// drowned the 28px row; bigger + a top scrim = the legibility fix.
+LV_FONT_DECLARE(font_inter_32);
 
 // Inset from the panel edge. The 2.16's glass has rounded corners; the rest of
 // the UI clears them with a 20px margin, and the status row sits nearer the
 // curve than anything else does, so it gets a wider one.
 #define SB_PAD_X 34
 
-// Where the glass pill sits: a thin iOS-style lozenge behind the status row,
-// inset a few px from the panel edges so its rim catches light clearly.
-#define SB_PILL_PAD_X   6
+
+// The panel's physical rounded corners cut any content near the top corners;
+// the status text insets clear the curve entirely.
+#define SB_PILL_PAD_X   10
 #define SB_PILL_PAD_TOP 3
 
 static lv_obj_t* bar        = nullptr;
-static lv_obj_t* pill       = nullptr;
 static lv_obj_t* lbl_clock  = nullptr;
+static lv_obj_t* lbl_link_gh = nullptr;   // the ghost shadows (the legibility)
+static lv_obj_t* lbl_batt_gh = nullptr;
+static lv_obj_t* clk_ghost   = nullptr;
+static constexpr int GHOST_DY = 2;   // the text shadow's drop (px)
 static lv_obj_t* lbl_link   = nullptr;   // BLE + WiFi glyphs
 static lv_obj_t* lbl_batt   = nullptr;
 
@@ -49,8 +54,12 @@ static void refresh_link(void) {
              s_wifi_up ? PH_WIFI " " : "",
              s_ble == BLE_STATE_CONNECTED ? PH_BLUETOOTH : "");
     lv_label_set_text(lbl_link, buf);
-    lv_obj_set_style_text_color(lbl_link,
-        (s_ble == BLE_STATE_CONNECTED || s_wifi_up) ? THEME_TEXT : THEME_DIM, 0);
+    if (lbl_link_gh) lv_label_set_text(lbl_link_gh, buf);
+    lv_obj_set_style_text_color(lbl_link, lv_color_hex(0xE5E5EA), 0);
+    if (lbl_link_gh) {
+        lv_label_set_text(lbl_link_gh, buf);
+        lv_obj_align_to(lbl_link_gh, lbl_batt_gh, LV_ALIGN_OUT_LEFT_MID, -8, GHOST_DY);
+    }
 }
 
 static void refresh_battery(void) {
@@ -69,8 +78,19 @@ static void refresh_battery(void) {
     else                 snprintf(buf, sizeof(buf), "%s", glyph);
     lv_label_set_text(lbl_batt, buf);
     lv_obj_set_style_text_color(lbl_batt,
-        (!s_charging && s_batt_pct >= 0 && s_batt_pct <= 10) ? THEME_RED : THEME_DIM, 0);
+        (!s_charging && s_batt_pct >= 0 && s_batt_pct <= 10) ? THEME_RED
+            : lv_color_hex(0xF2F2F7), 0);
+    if (lbl_batt_gh) {
+        lv_label_set_text(lbl_batt_gh, buf);
+        lv_obj_align(lbl_batt_gh, LV_ALIGN_RIGHT_MID, -(SB_PAD_X + 14), GHOST_DY);
+    }
 }
+
+// The top-fade scrim's ramp: 80% black at the top edge → clear at the row's
+// bottom; LVGL's stop fracs = 0..255.
+static const lv_color_t scrim_cols[2] = { LV_COLOR_MAKE(0,0,0), LV_COLOR_MAKE(0,0,0) };
+static const uint8_t     scrim_opas[2] = { LV_OPA_80, LV_OPA_TRANSP };
+static const uint8_t     scrim_fracs[2] = { 0, 255 };
 
 void statusbar_init(lv_obj_t* parent) {
     const int W = board_caps().width;
@@ -78,7 +98,18 @@ void statusbar_init(lv_obj_t* parent) {
     bar = lv_obj_create(parent);
     lv_obj_set_size(bar, W, STATUSBAR_H);
     lv_obj_set_pos(bar, 0, 0);
+    // Legibility over the photo: a short TOP SCRIM — black fading to clear
+    // within ~1 row height (not a glass box: the = = the = = the factory
+    // anatomy carries no pill and the = = the = = the = = = =
     lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_grad_dir(bar, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_grad_opa(bar, 255, 0);
+    static lv_grad_dsc_t scrim_grad;
+    lv_grad_init_stops(&scrim_grad, scrim_cols, scrim_opas, scrim_fracs, 2);
+    lv_grad_vertical_init(&scrim_grad);
+    lv_obj_set_style_bg_grad(bar, &scrim_grad, 0);
+    lv_obj_set_style_bg_grad_opa(bar, 255, 0);
     lv_obj_set_style_border_width(bar, 0, 0);
     lv_obj_set_style_pad_all(bar, 0, 0);
     lv_obj_set_style_radius(bar, 0, 0);
@@ -86,93 +117,44 @@ void statusbar_init(lv_obj_t* parent) {
     // The bar is drawn over app content but must never steal touches from it.
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_CLICKABLE);
 
-    // Glass pill behind the status row — the same translucent treatment the
-    // launcher tiles get, scaled to a lozenge: cool light on top fading to a
-    // darker pool, thin bright rim on the edge, no shadow (it hangs in air
-    // against the wallpaper, nothing to ground it onto).
-    pill = lv_obj_create(bar);
-    const int pill_w = W - 2 * SB_PILL_PAD_X;
-    const int pill_h = STATUSBAR_H - 2 * SB_PILL_PAD_TOP;
-    lv_obj_set_size(pill, pill_w, pill_h);
-    lv_obj_set_pos(pill, SB_PILL_PAD_X, SB_PILL_PAD_TOP);
-    lv_obj_set_style_radius(pill, pill_h / 2, 0);
-    // Transmission recipe (critic r2): cream @low-opa over the wallpaper's
-    // own color so the backlight shows through (was solid cream @175).
-    lv_obj_set_style_bg_color(pill, lv_color_mix(THEME_BG_TOP, SHEEN_TINT, 40), 0);
-    lv_obj_set_style_bg_opa(pill, 130, 0);
-    lv_obj_set_style_bg_grad_color(pill, lv_color_mix(THEME_BG_BOT, SHEEN_TINT, 60), 0);
-    lv_obj_set_style_bg_grad_opa(pill, 190, 0);
-    lv_obj_set_style_bg_grad_dir(pill, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_main_stop(pill, 0, 0);
-    lv_obj_set_style_bg_grad_stop(pill, 255, 0);
-    // Asymmetric liquid specular (r8: near-uniform hairline = frosted class;
-    // Apple's pill has a BRIGHTER top rim): border stays warm cream but a
-    // clipped bright top-slab child adds the directional specular segment.
-    lv_obj_set_style_border_color(pill, RIM_CREAM, 0);
-    lv_obj_set_style_border_width(pill, 2, 0);
-    lv_obj_set_style_border_opa(pill, 150, 0);
-    lv_obj_set_style_outline_color(pill, GLASS_SHADOW, 0);
-    lv_obj_set_style_outline_width(pill, 1, 0);
-    lv_obj_set_style_outline_pad(pill, 0, 0);
-    lv_obj_set_style_outline_opa(pill, 80, 0);
-    lv_obj_clear_flag(pill, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(pill, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(pill, LV_OBJ_FLAG_IGNORE_LAYOUT);
-
-    // Top sheen on the pill: the same light-wash the tiles wear, shortened so
-    // it stays in the pill's upper half and reads as one material with them.
-    lv_obj_t* sheen = lv_obj_create(pill);
-    lv_obj_set_size(sheen, pill_w, pill_h / 2);
-    lv_obj_set_pos(sheen, 0, 0);
-    lv_obj_set_style_bg_color(sheen, RIM_HI, 0);
-    lv_obj_set_style_bg_grad_color(sheen, RIM_HI, 0);
-    lv_obj_set_style_bg_grad_opa(sheen, 0, 0);
-    lv_obj_set_style_bg_grad_dir(sheen, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_opa(sheen, 52, 0);
-    lv_obj_set_style_radius(sheen, pill_h / 2, 0);
-    lv_obj_set_style_border_width(sheen, 0, 0);
-    lv_obj_set_style_pad_all(sheen, 0, 0);
-    lv_obj_clear_flag(sheen, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(sheen, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(sheen, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_set_style_clip_corner(sheen, true, 0);
-
-    // Interior refraction streak (r8 design gap): a soft warm amber pool in
-    // the fill's lower-left, 0-opa fading — reads as light refracted inside
-    // the slab, not a paint stripe.
-    lv_obj_t* pool = lv_obj_create(pill);
-    lv_obj_set_size(pool, (pill_w * 3) / 5, (pill_h * 2) / 3);
-    lv_obj_set_pos(pool, 0, pill_h / 3);
-    lv_obj_set_style_radius(pool, pill_h, 0);
-    lv_obj_set_style_bg_color(pool, lv_color_hex(0xd98e5a), 0);
-    lv_obj_set_style_bg_grad_color(pool, lv_color_hex(0xd98e5a), 0);
-    lv_obj_set_style_bg_opa(pool, 26, 0);
-    lv_obj_set_style_bg_grad_opa(pool, 0, 0);
-    lv_obj_set_style_bg_grad_dir(pool, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_main_stop(pool, 0, 0);
-    lv_obj_set_style_bg_grad_stop(pool, 255, 0);
-    lv_obj_set_style_border_width(pool, 0, 0);
-    lv_obj_set_style_pad_all(pool, 0, 0);
-    lv_obj_clear_flag(pool, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(pool, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(pool, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_set_style_clip_corner(pool, true, 0);
-
+    // The reference desktop carries NO box behind the status row: white
+    // text + glyphs directly over the wallpaper, legibility via a 2px dark
+    // ghost under each item (the iOS/factory anatomy). The old glass pill
+    // smeared over the photo — cut entirely per user call.
     lbl_clock = lv_label_create(bar);
     lv_label_set_text(lbl_clock, "--:--");
-    lv_obj_set_style_text_font(lbl_clock, &font_inter_20, 0);
-    lv_obj_set_style_text_color(lbl_clock, THEME_TEXT, 0);
+    lv_obj_set_style_text_font(lbl_clock, &font_inter_32, 0);
+    lv_obj_set_style_text_color(lbl_clock, lv_color_hex(0xffffff), 0);
     lv_obj_align(lbl_clock, LV_ALIGN_LEFT_MID, SB_PAD_X, 0);
+    clk_ghost = lv_label_create(bar);
+    lv_label_set_text(clk_ghost, "--:--");
+    lv_obj_set_style_text_font(clk_ghost, &font_inter_32, 0);
+    lv_obj_set_style_text_color(clk_ghost, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_text_opa(clk_ghost, 190, 0);
+    lv_obj_align(clk_ghost, LV_ALIGN_LEFT_MID, SB_PAD_X - 2, GHOST_DY);
 
     lbl_batt = lv_label_create(bar);
-    lv_obj_set_style_text_font(lbl_batt, &font_inter_20, 0);
-    lv_obj_set_style_text_color(lbl_batt, THEME_DIM, 0);
-    lv_obj_align(lbl_batt, LV_ALIGN_RIGHT_MID, -SB_PAD_X, 0);
+    lv_obj_set_style_text_font(lbl_batt, &font_inter_32, 0);
+    lv_obj_set_style_text_color(lbl_batt, lv_color_hex(0xffffff), 0);
+    lbl_batt_gh = lv_label_create(bar);
+    lv_obj_set_style_text_font(lbl_batt_gh, &font_inter_32, 0);
+    lv_obj_set_style_text_color(lbl_batt_gh, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_text_opa(lbl_batt_gh, 190, 0);
+    lv_obj_align(lbl_batt_gh, LV_ALIGN_RIGHT_MID, -(SB_PAD_X + 14 - 2), GHOST_DY);
+    // Rounded-corner clearance: at the bar's height the corner curve eats
+    // everything past ~x446; the battery row gets a deeper inset than the
+    // clock's so the glyph's cap survives it.
+    lv_obj_align(lbl_batt, LV_ALIGN_RIGHT_MID, -(SB_PAD_X + 14), 0);
 
     lbl_link = lv_label_create(bar);
-    lv_obj_set_style_text_font(lbl_link, &font_inter_20, 0);
-    lv_obj_set_style_text_color(lbl_link, THEME_DIM, 0);
+    lv_obj_set_style_text_font(lbl_link, &font_inter_32, 0);
+    lv_obj_set_style_text_color(lbl_link, lv_color_hex(0xffffff), 0);
     lv_obj_align_to(lbl_link, lbl_batt, LV_ALIGN_OUT_LEFT_MID, -8, 0);
+    lbl_link_gh = lv_label_create(bar);
+    lv_obj_set_style_text_font(lbl_link_gh, &font_inter_32, 0);
+    lv_obj_set_style_text_color(lbl_link_gh, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_text_opa(lbl_link_gh, 190, 0);
+    lv_obj_align_to(lbl_link_gh, lbl_batt_gh, LV_ALIGN_OUT_LEFT_MID, -8, GHOST_DY);
 
     if (!board_caps().has_battery) {
         lv_obj_add_flag(lbl_batt, LV_OBJ_FLAG_HIDDEN);
@@ -181,6 +163,14 @@ void statusbar_init(lv_obj_t* parent) {
 
     refresh_link();
     refresh_battery();
+    // The ghosts mirror their live labels (one relayout point).
+    if (clk_ghost) {
+        lv_label_set_text(clk_ghost, lv_label_get_text(lbl_clock));
+    }
+    if (lbl_batt_gh) {
+        lv_label_set_text(lbl_batt_gh, lv_label_get_text(lbl_batt));
+        lv_obj_align(lbl_batt_gh, LV_ALIGN_RIGHT_MID, -(SB_PAD_X + 14 - 2), GHOST_DY);
+    }
 }
 
 void statusbar_tick(void) {
@@ -190,6 +180,7 @@ void statusbar_tick(void) {
     if (strcmp(buf, s_last_clock) != 0) {   // only relayout when the minute flips
         strlcpy(s_last_clock, buf, sizeof(s_last_clock));
         lv_label_set_text(lbl_clock, buf);
+        if (clk_ghost) lv_label_set_text(clk_ghost, buf);
     }
 }
 

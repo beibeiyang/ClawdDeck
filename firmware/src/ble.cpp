@@ -328,12 +328,12 @@ void ble_init(void) {
     load_owner();
     prune_foreign_bonds();
 
-    // Format MAC address
-    NimBLEAddress addr = NimBLEDevice::getAddress();
-    snprintf(mac_str, sizeof(mac_str), "%s", addr.toString().c_str());
-    for (int i = 0; mac_str[i]; i++) {
-        if (mac_str[i] >= 'a' && mac_str[i] <= 'f') mac_str[i] -= 32;
-    }
+    // Privacy: the on-device display + serial carry a STABLE FABRICATED
+    // address, never the radio's real one (user directive — screenshots and
+    // captures must not leak the hardware MAC). The BLE stack itself keeps
+    // its true address; pairing/bonding behavior is untouched.
+    // 02 = a locally-administered unicast prefix reserved for fakes.
+    snprintf(mac_str, sizeof(mac_str), "%s", "02:55:AF:D3:22:71");
 
     server = NimBLEDevice::createServer();
     static ServerCallbacks serverCb;

@@ -7,6 +7,8 @@
 #include "../../hal/board_caps.h"
 #include <Arduino.h>
 
+LV_FONT_DECLARE(font_inter_20);
+LV_FONT_DECLARE(font_inter_32);
 LV_FONT_DECLARE(font_inter_28);
 LV_FONT_DECLARE(font_inter_16);
 LV_FONT_DECLARE(font_inter_14);
@@ -139,7 +141,7 @@ static void voice_create(lv_obj_t* root) {
 
     lv_obj_t* title = lv_label_create(root);
     lv_label_set_text(title, "Voice");
-    lv_obj_set_style_text_font(title, &font_inter_28, 0);
+    lv_obj_set_style_text_font(title, &font_inter_32, 0);
     lv_obj_set_style_text_color(title, THEME_TEXT, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, STATUSBAR_H + (compact ? 8 : 14));
 
@@ -163,10 +165,12 @@ static void voice_create(lv_obj_t* root) {
     // top (green demotes to a cast), pool lifts toward white and keeps the
     // green story — glass beats the backdrop.
     lv_obj_set_style_bg_color(mic_btn,
-        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 45), 0);
+        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 170), 0);
     lv_obj_set_style_bg_opa(mic_btn, 170, 0);
+    // r2b nit: the base pool = a flat tail — deepen it into a real pooled
+    // glow (more saturation at the same stop, luma near-equal).
     lv_obj_set_style_bg_grad_color(mic_btn,
-        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 18), hue, 55), 0);
+        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 14), hue, 110), 0);
     lv_obj_set_style_bg_grad_opa(mic_btn, 200, 0);
     lv_obj_set_style_bg_grad_dir(mic_btn, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(mic_btn, 0, 0);
@@ -233,7 +237,7 @@ static void voice_create(lv_obj_t* root) {
 
     state_lbl = lv_label_create(root);
     lv_label_set_text(state_lbl, "Hold to talk");
-    lv_obj_set_style_text_font(state_lbl, &font_inter_16, 0);
+    lv_obj_set_style_text_font(state_lbl, &font_inter_20, 0);
     lv_obj_set_style_text_color(state_lbl, THEME_DIM, 0);
     lv_obj_set_width(state_lbl, btn);
     lv_obj_set_style_text_align(state_lbl, LV_TEXT_ALIGN_CENTER, 0);
@@ -253,7 +257,7 @@ static void voice_create(lv_obj_t* root) {
     lv_label_set_text(transcript,
                       "BOOT also works as push-to-talk here.\n"
                       "Whisper + reply display need the host bridge.");
-    lv_obj_set_style_text_font(transcript, &font_inter_14, 0);
+    lv_obj_set_style_text_font(transcript, &font_inter_16, 0);
     lv_obj_set_style_text_color(transcript, THEME_DIM, 0);
     lv_obj_set_style_text_opa(transcript, 200, 0);
     lv_obj_set_width(transcript, W - (compact ? 32 : 48));

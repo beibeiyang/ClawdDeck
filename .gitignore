@@ -1,3 +1,6 @@
+# IDE
+.idea/
+
 # PlatformIO build artifacts
 firmware/.pio/
 firmware/.vscode/
@@ -21,3 +24,21 @@ __pycache__/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Private working captures + gauntlet-loop internals (local-only):
+# the session book, the blind-critic mapping, the reference-bar photos,
+# the html-log generator (carries local home paths), the bmp pixel tool,
+# the desktop sim's scratch shot, the misc dev helper — none ship.
+.gauntlet-session.md
+.gauntlet-critic-mapping.json
+.ignore
+ollama-dual.sh
+firmware/sim-autoshot.bmp
+firmware/*.bmp
+research/bars/
+research/build_gauntlet_log.py
+research/tooling/
+!/screenshots/readme/**
+screenshots/gauntlet-*
+screenshots/*.bmp
+screenshots/perf-*.png

@@ -8,6 +8,8 @@
 
 LV_FONT_DECLARE(font_tiempos_56);
 LV_FONT_DECLARE(font_tiempos_34);
+LV_FONT_DECLARE(font_inter_18);
+LV_FONT_DECLARE(font_inter_24);
 LV_FONT_DECLARE(font_inter_20);
 LV_FONT_DECLARE(font_inter_14);
 
@@ -221,14 +223,14 @@ static void clock_create(lv_obj_t* root) {
 
     // Date inside the card under the time (Inter, dim).
     date_lbl = lv_label_create(face);
-    lv_obj_set_style_text_font(date_lbl, &font_inter_20, 0);
+    lv_obj_set_style_text_font(date_lbl, &font_inter_24, 0);
     lv_obj_set_style_text_color(date_lbl, THEME_INK, 0);
     lv_obj_set_style_text_opa(date_lbl, 150, 0);
     lv_obj_align_to(date_lbl, time_lbl, LV_ALIGN_OUT_BOTTOM_MID, 0, compact ? 12 : 24);
 
     // Hint — Inter 14 (range 0x20-0x7E includes '·', so the tofu box is gone).
     hint_lbl = lv_label_create(root);
-    lv_obj_set_style_text_font(hint_lbl, &font_inter_14, 0);
+    lv_obj_set_style_text_font(hint_lbl, &font_inter_18, 0);
     lv_obj_set_style_text_color(hint_lbl, THEME_ACCENT, 0);
     lv_obj_align(hint_lbl, LV_ALIGN_BOTTOM_MID, 0, -(CLOCK_FOOT_H + 16));
     // Label defaults to left-align: keep the hint optically centered.
