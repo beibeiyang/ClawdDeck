@@ -1,5 +1,6 @@
 #include "../../shell/app.h"
 #include "../../theme.h"
+#include "../../phosphor_cp.h"
 #include "../../hal/board_caps.h"
 #include "../../hal/audio_in_hal.h"
 #include <math.h>
@@ -11,8 +12,10 @@
 #include <esp_heap_caps.h>
 #endif
 
-LV_FONT_DECLARE(font_styrene_28);
-LV_FONT_DECLARE(font_styrene_14);
+LV_FONT_DECLARE(font_inter_16);
+LV_FONT_DECLARE(font_inter_32);
+LV_FONT_DECLARE(font_inter_28);
+LV_FONT_DECLARE(font_inter_14);
 
 // Waveshare factory SpecAnalyzer (05_Spec_Analyzer) adapted to ClawdDeck.
 
@@ -197,7 +200,7 @@ static void micscope_create(lv_obj_t* root) {
 
     lv_obj_t* title = lv_label_create(root);
     lv_label_set_text(title, "SpecAnalyzer");
-    lv_obj_set_style_text_font(title, &font_styrene_28, 0);
+    lv_obj_set_style_text_font(title, &font_inter_32, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(0xf0f4ff), 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, compact ? 36 : 48);
 
@@ -213,9 +216,20 @@ static void micscope_create(lv_obj_t* root) {
     lv_obj_align(canvas, LV_ALIGN_CENTER, 0, compact ? 8 : 16);
     lv_obj_set_style_radius(canvas, 16, 0);
     lv_obj_set_style_clip_corner(canvas, true, 0);
+    // Glass frame: cream rim + dark outline + puddle (the house recipe).
+    lv_obj_set_style_border_color(canvas, RIM_CREAM, 0);
+    lv_obj_set_style_border_width(canvas, 1, 0);
+    lv_obj_set_style_border_opa(canvas, 110, 0);
+    lv_obj_set_style_outline_color(canvas, RIM_DARK, 0);
+    lv_obj_set_style_outline_width(canvas, 1, 0);
+    lv_obj_set_style_outline_opa(canvas, 90, 0);
+    lv_obj_set_style_shadow_color(canvas, GLASS_SHADOW, 0);
+    lv_obj_set_style_shadow_width(canvas, 14, 0);
+    lv_obj_set_style_shadow_ofs_y(canvas, 5, 0);
+    lv_obj_set_style_shadow_opa(canvas, 25, 0);
 
     lv_obj_t* hint = lv_label_create(root);
-    lv_obj_set_style_text_font(hint, &font_styrene_14, 0);
+    lv_obj_set_style_text_font(hint, &font_inter_16, 0);
     lv_obj_set_style_text_color(hint, THEME_DIM, 0);
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -(compact ? 28 : 36));
 
@@ -271,8 +285,8 @@ static void micscope_tick(void) {
 extern const AppDef app_micscope = {
     .id            = "micscope",
     .title         = "SpecAnalyzer",
-    .glyph         = LV_SYMBOL_VOLUME_MAX,
-    .tile_rgb      = 0x7b4bb9,
+    .glyph         = PH_MICROPHONE,
+    .tile_rgb      = 0x8a4bc4,
     .blurb         = "Live audio spectrum — factory SpecAnalyzer demo.",
     .required_caps = APP_CAP_MIC,
     .persistent    = false,

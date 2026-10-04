@@ -73,6 +73,12 @@ void power_hal_tick(void) {
     }
 }
 
+void power_hal_power_off(void) {
+    // XPOWERS AXP2101: cut the regulated rails (real off; the SoC loses
+    // power when the rails drop). One-shot: no return.
+    pmu.shutdown();   // AXP2101: turn off all power channels (real off)
+}
+
 int  power_hal_battery_pct(void) { return cached_pct; }
 bool power_hal_is_charging(void) { return cached_charging; }
 bool power_hal_is_vbus_in(void)  { return cached_vbus; }

@@ -1,4 +1,5 @@
 #include "../../shell/app.h"
+#include "../../phosphor_cp.h"
 #include "../../ui.h"
 #include "../../splash.h"
 #include "../../usage_rate.h"
@@ -80,8 +81,8 @@ static void clawdmeter_on_battery(int percent, bool charging) {
 extern const AppDef app_clawdmeter = {
     .id         = "clawdmeter",
     .title      = "Clawdmeter",
-    .glyph      = LV_SYMBOL_CHARGE,
-    .tile_rgb   = 0xd97757,        // brand terra-cotta
+    .glyph      = PH_BATTERY_CHARGE,
+    .tile_rgb   = 0xb85739,        // brand terra-cotta
     .required_caps = APP_CAP_BLE,
     .persistent = true,
     .immersive  = true,
