@@ -13,6 +13,8 @@ LV_FONT_DECLARE(font_inter_14);
 LV_FONT_DECLARE(font_phos_40);
 LV_FONT_DECLARE(font_phos_28);
 LV_FONT_DECLARE(font_phos_20);
+LV_FONT_DECLARE(font_phos_fill_96);
+LV_FONT_DECLARE(font_phos_fill_64);
 
 // Space kept clear at the bottom for the page dots and the home pill.
 #define LAUNCHER_FOOT_H 34
@@ -70,8 +72,9 @@ static void compute_layout(const BoardCaps& c) {
     G.radius    = G.tile * 28 / 100 + 2;
     G.label_gap = (G.tile >= 80) ? 10 : 4;
 
-    G.glyph_font = (G.tile >= 150) ? &font_phos_40
-                 : (G.tile >=  88) ? &font_phos_40
+    // Launcher tiles = the iOS app-icon class: the Phosphor-FILL glyph family.
+    G.glyph_font = (G.tile >= 150) ? &font_phos_fill_96
+                 : (G.tile >=  88) ? &font_phos_fill_64
                  : (G.tile >=  60) ? &font_phos_28
                                    : &font_phos_20;
     // Apple-grade label type: Inter (SIL OFL, SF lookalike) replaces the
@@ -224,75 +227,78 @@ static lv_color_t wall_base_at(int row) {
                       : lv_color_mix(THEME_BG_BOT, THEME_BG_TOP, 55);
 }
 
-static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius, int row) {
-    const lv_color_t hue  = lv_color_hex(d->tile_rgb);
-    const lv_color_t wall = wall_base_at(row);   // backdrop light behind glass
+// ---- iOS-class app icon ramps (the factory-desktop look) --------------------
+// The reference home screen: opaque squircles, saturated two-stop gradients,
+// white FPhosphor fill glyphs (dark ink on the silver tile only).
+struct IconRamp { uint32_t rgb; uint32_t cap; uint32_t pool; bool dark_ink; };
+static const IconRamp ICON_RAMPS[] = {
+    { 0xb85739, 0xFF9F6E, 0xE25822, false },  // clawdmeter   — ember
+    { 0x5f8f46, 0x7BD96C, 0x2F9E44, false },  // voice        — green
+    { 0x7256b8, 0xB98EF2, 0x7B3FE4, false },  // sessions     — purple
+    { 0x2b5b6e, 0x6FC3E8, 0x1673A9, false },  // clock        — blue
+    { 0x8a4bc4, 0xD98EF5, 0x8B3DDE, false },  // SpecAnalyzer — violet
+    { 0x3953c8, 0x7FA8FF, 0x2D5BE8, false },  // level        — royal blue
+    { 0x7a4b6b, 0xE8A7C3, 0xC2558C, false },  // host         — plum-rose
+    { 0xf2f2f7, 0xF7F7FA, 0xC9C9D1, true  },  // settings     — silver, dark ink
+};
+static const IconRamp* icon_ramp_for(uint32_t rgb) {
+    for (auto& r : ICON_RAMPS) if (r.rgb == rgb) return &r;
+    return &ICON_RAMPS[0];
+}
+static lv_color_t icon_glyph_color_of(const AppDef* d) {
+    const IconRamp* r = icon_ramp_for(d->tile_rgb);
+    return r->dark_ink ? lv_color_make(0x3a, 0x3a, 0x40)
+                       : lv_color_make(0xFF, 0xFF, 0xFF);
+}
 
-    // Body — LIFT model (critic r5: Apple glass brightens what's behind it;
-    // dark-tint-over-backdrop is the 2020-Android tell). The fill is the
-    // wallpaper's own light ADDED-TO: brightened wall (the slab's inner
-    // luminance) with the hue as a color cast, not a darkener. Cap stop =
-    // wall lifted hard toward cream (light entering); pool stop = wall
-    // lifted toward hue (light gathering in color). Opas moderate: bright
-    // color doing the work, not coverage.
-    // Chroma-dominant ramp (r7: luma-only ramps quantize into plateaus on
-    // 16bpp): top = cream-lit, clearly LOWER saturation; pool = saturated hue
-    // at similar luma. The eye reads a smooth HUE flow — the 5-bit luma
-    // quantization rides along inaudibly instead of showing plateaus.
-    const lv_color_t top_c = lv_color_mix(wall, RIM_CREAM, 40);
-    lv_obj_set_style_bg_color(icon,
-        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 165), 0);
-    lv_obj_set_style_bg_opa(icon, 145, 0);
-    lv_obj_set_style_bg_grad_color(icon,
-        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 12), hue, 82), 0);
-    lv_obj_set_style_bg_grad_opa(icon, 185, 0);
+// ---- iOS-class tile (the factory-desktop icon look) --------------------------
+// Opaque squircle app icon: saturated two-stop ramp (bright cap → deep pool,
+// same hue), the soft internal top-light, a hairline dark contour + a puddle
+// shadow for seating on the photo. The glyph = a WHITE Phosphor-FILL icon
+// (dark ink on the silver tile only) — the caller owns it. Pressed = the
+// baked DIMMED variant (radius<0 sentinel so one recipe serves both bakes).
+static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius, int row) {
+    const IconRamp* ramp = icon_ramp_for(d->tile_rgb);
+    const lv_color_t cap  = lv_color_hex(ramp->cap);
+    const lv_color_t pool = lv_color_hex(ramp->pool);
+    const bool dim = (radius < 0);
+
+    // Opaque body: bright cap → deep pool, chroma-dominant (the 16bpp
+    // quantization rides the hue flow, not luma plateaus).
+    lv_obj_set_style_bg_color(icon, cap, 0);
+    lv_obj_set_style_bg_grad_color(icon, pool, 0);
+    lv_obj_set_style_bg_opa(icon, dim ? LV_OPA_40 : LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_grad_opa(icon, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_grad_dir(icon, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(icon, 0, 0);
-    lv_obj_set_style_bg_grad_stop(icon, 240, 0);
+    lv_obj_set_style_bg_grad_stop(icon, 235, 0);
 
-    // Drop shadow: soft puddle straight down (attempt-2 tuned: light).
+    // Seating: a soft puddle + a 1px darkened contour. No cream rim, no glass
+    // glint children — the icon is self-lit, the app-icon class.
     lv_obj_set_style_shadow_color(icon, GLASS_SHADOW, 0);
-    lv_obj_set_style_shadow_width(icon, 14, 0);
+    lv_obj_set_style_shadow_width(icon, 16, 0);
     lv_obj_set_style_shadow_spread(icon, 0, 0);
-    lv_obj_set_style_shadow_ofs_y(icon, 5, 0);
-    lv_obj_set_style_shadow_opa(icon, 25, 0);
+    lv_obj_set_style_shadow_ofs_y(icon, 6, 0);
+    lv_obj_set_style_shadow_opa(icon, dim ? 45 : 70, 0);
+    lv_obj_set_style_border_color(icon, lv_color_mix(pool, lv_color_hex(0x000000), 55), 0);
+    lv_obj_set_style_border_width(icon, 1, 0);
+    lv_obj_set_style_border_opa(icon, 110, 0);
 
-    // Directional rim (critic r2: uniform outline reads plastic): light comes
-    // from above — cream glint on the TOP arc only, faint warm sides, none at
-    // the base (the shadow side), plus the dark outer contour for seating.
-    // Light comes from above: warm cream rim, but the glint sits on the
-    // top arc — a clipped top-half highlight child gives the directional
-    // glint the uniform border can't (critic r2).
-    lv_obj_set_style_border_color(icon, RIM_CREAM, 0);
-    lv_obj_set_style_border_width(icon, 2, 0);
-    lv_obj_set_style_border_opa(icon, 95, 0);
-    lv_obj_t* glint = lv_obj_create(icon);
-    lv_obj_set_size(glint, lv_obj_get_width(icon) - 24, (lv_obj_get_height(icon) / 2) - 12);
-    lv_obj_align(glint, LV_ALIGN_TOP_MID, 0, 8);
-    lv_obj_set_style_bg_color(glint, lv_color_mix(RIM_CREAM, lv_color_hex(0xfff6ea), 50), 0);
-    lv_obj_set_style_bg_grad_color(glint, RIM_CREAM, 0);
-    lv_obj_set_style_bg_grad_dir(glint, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_opa(glint, 78, 0);
-    lv_obj_set_style_bg_grad_opa(glint, 0, 0);
-    lv_obj_set_style_bg_main_stop(glint, 0, 0);
-    lv_obj_set_style_bg_grad_stop(glint, 255, 0);
-    lv_obj_set_size(glint, lv_obj_get_width(icon) - 28, (lv_obj_get_height(icon) * 5) / 8 - 14);
-    lv_obj_set_style_radius(glint, (lv_obj_get_height(glint)) / 2, 0);
-    lv_obj_set_style_border_width(glint, 0, 0);
-    lv_obj_set_style_pad_all(glint, 0, 0);
-    lv_obj_clear_flag(glint, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(glint, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(glint, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_set_style_clip_corner(glint, true, 0);
-    lv_obj_set_style_outline_color(icon, GLASS_SHADOW, 0);
-    lv_obj_set_style_outline_width(icon, 1, 0);
-    lv_obj_set_style_outline_pad(icon, 0, 0);
-    lv_obj_set_style_outline_opa(icon, 90, 0);
-
-    // Press feedback: brighten the glass and deepen the puddle — pressed
-    // glass feels thicker, not dimmer.
-    lv_obj_set_style_bg_opa(icon, 190, LV_STATE_PRESSED);
-    lv_obj_set_style_shadow_opa(icon, 60, LV_STATE_PRESSED);
+    // Internal top-light: one clipped white rounded rect over the upper half
+    // (the iOS icons' inherent upper luminance).
+    const int w = lv_obj_get_width(icon), h = lv_obj_get_height(icon);
+    lv_obj_t* light = lv_obj_create(icon);
+    lv_obj_set_size(light, w - 16, h / 2);
+    lv_obj_align(light, LV_ALIGN_TOP_MID, 0, 4);
+    lv_obj_set_style_bg_color(light, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_bg_opa(light, dim ? 18 : 42, 0);
+    lv_obj_set_style_radius(light, (w - 16) / 2, 0);
+    lv_obj_set_style_border_width(light, 0, 0);
+    lv_obj_set_style_pad_all(light, 0, 0);
+    lv_obj_set_style_clip_corner(light, true, 0);
+    lv_obj_clear_flag(light, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(light, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(light, LV_OBJ_FLAG_IGNORE_LAYOUT);
 }
 
 // ---- Tile bake -------------------------------------------------------------
@@ -390,12 +396,13 @@ static lv_draw_buf_t* bake_tile(lv_obj_t* scratch_root, const AppDef* d,
     lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
     build_tile_glass(body, d, row, pressed);
 
-    // Glyph (baked into the glass, ink on glass as before).
+    // Glyph: the WHITE Phosphor-FILL icon (the iPhone app-icon glyph); dark
+    // ink on the silver tile. Opacity drops with the pressed bake (the dim).
     lv_obj_t* glyph = lv_label_create(body);
     lv_label_set_text(glyph, d->glyph);
     lv_obj_set_style_text_font(glyph, G.glyph_font, 0);
-    lv_obj_set_style_text_color(glyph, THEME_INK, 0);
-    lv_obj_set_style_text_opa(glyph, 235, 0);
+    lv_obj_set_style_text_color(glyph, icon_glyph_color_of(d), 0);
+    lv_obj_set_style_text_opa(glyph, pressed ? 160 : 255, 0);
     lv_obj_center(glyph);
     lv_obj_set_style_text_letter_space(glyph, 0, 0);
 
@@ -404,59 +411,10 @@ static lv_draw_buf_t* bake_tile(lv_obj_t* scratch_root, const AppDef* d,
 }
 
 static void build_tile_glass(lv_obj_t* tile, const AppDef* d, int row, bool pressed) {
-    // glass_tile()'s recipe with the state baked: pressed lifts the fill
-    // (opa 145→190) and deepens the puddle (opa 25→60) — the values the live
-    // object uses under LV_STATE_PRESSED.
-    const int  fill_opa   = pressed ? 190 : 145;
-    const int  grad_opa   = pressed ? 230 : 185;
-    const int  rim_opa    = pressed ? 120 : 95;
-    const int  shadow_opa = pressed ? 60 : 25;
-    const lv_color_t hue  = lv_color_hex(d->tile_rgb);
-    const lv_color_t wall = g_lift_key;
-
-    lv_obj_set_style_bg_color(tile,
-        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 165), 0);
-    lv_obj_set_style_bg_opa(tile, fill_opa, 0);
-    lv_obj_set_style_bg_grad_color(tile,
-        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 12), hue, 82), 0);
-    lv_obj_set_style_bg_grad_opa(tile, grad_opa, 0);
-    lv_obj_set_style_bg_grad_dir(tile, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_main_stop(tile, 0, 0);
-    lv_obj_set_style_bg_grad_stop(tile, 240, 0);
-
-    lv_obj_set_style_shadow_color(tile, GLASS_SHADOW, 0);
-    lv_obj_set_style_shadow_width(tile, 14, 0);
-    lv_obj_set_style_shadow_spread(tile, 0, 0);
-    lv_obj_set_style_shadow_ofs_y(tile, 5, 0);
-    lv_obj_set_style_shadow_opa(tile, shadow_opa, 0);
-
-    lv_obj_set_style_border_color(tile, RIM_CREAM, 0);
-    lv_obj_set_style_border_width(tile, 2, 0);
-    lv_obj_set_style_border_opa(tile, rim_opa, 0);
-
-    // Directional top-arc glint (the live recipe's child).
-    lv_obj_t* glint = lv_obj_create(tile);
-    lv_obj_set_size(glint, lv_obj_get_width(tile) - 28, (lv_obj_get_height(tile) * 5) / 8 - 14);
-    lv_obj_align(glint, LV_ALIGN_TOP_MID, 0, 8);
-    lv_obj_set_style_bg_color(glint, lv_color_mix(RIM_CREAM, lv_color_hex(0xfff6ea), 50), 0);
-    lv_obj_set_style_bg_grad_color(glint, RIM_CREAM, 0);
-    lv_obj_set_style_bg_grad_dir(glint, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_opa(glint, 78, 0);
-    lv_obj_set_style_bg_grad_opa(glint, 0, 0);
-    lv_obj_set_style_bg_main_stop(glint, 0, 0);
-    lv_obj_set_style_bg_grad_stop(glint, 255, 0);
-    lv_obj_set_style_radius(glint, (lv_obj_get_height(glint)) / 2, 0);
-    lv_obj_set_style_border_width(glint, 0, 0);
-    lv_obj_set_style_pad_all(glint, 0, 0);
-    lv_obj_clear_flag(glint, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(glint, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(glint, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_set_style_clip_corner(glint, true, 0);
-
-    lv_obj_set_style_outline_color(tile, GLASS_SHADOW, 0);
-    lv_obj_set_style_outline_width(tile, 1, 0);
-    lv_obj_set_style_outline_pad(tile, 0, 0);
-    lv_obj_set_style_outline_opa(tile, 90, 0);
+    // The iOS icon recipe (one source of truth); the pressed bake = the
+    // dimmed variant via glass_tile's radius<0 sentinel.
+    glass_tile(tile, d, pressed ? -1 : G.radius, row);
+    lv_obj_set_style_radius(tile, G.radius, 0);
 }
 
 struct TileBake { const lv_draw_buf_t* rest; const lv_draw_buf_t* down; };
@@ -531,14 +489,26 @@ static void make_tile(lv_obj_t* page, int slot, int app_index) {
         lv_obj_set_style_text_letter_space(glyph, 0, 0);
     }
 
-    lv_obj_t* label = lv_label_create(page);
+    // iOS label anatomy: white text + a soft dark ghost offset 2px down for
+// legibility over any backdrop (the reference home screen renders both).
+lv_obj_t* label = lv_label_create(page);
     lv_label_set_text(label, d->title);
     lv_obj_set_style_text_font(label, G.label_font, 0);
-    lv_obj_set_style_text_color(label, THEME_TEXT, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(0xffffff), 0);
     lv_obj_set_width(label, G.cell_w);
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(label, cell_x, cell_y + G.tile + G.label_gap);
+    lv_obj_t* ghost = lv_label_create(page);
+    lv_label_set_text(ghost, d->title);
+    lv_obj_set_style_text_font(ghost, G.label_font, 0);
+    lv_obj_set_style_text_color(ghost, lv_color_hex(0x1a2612), 0);
+    lv_obj_set_style_text_opa(ghost, 150, 0);
+    lv_obj_set_width(ghost, G.cell_w);
+    lv_obj_set_style_text_align(ghost, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(ghost, LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(ghost, cell_x, cell_y + G.tile + G.label_gap + 2);
+    lv_obj_move_foreground(label);
 }
 
 static void refresh_dots(void) {

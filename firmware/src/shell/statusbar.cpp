@@ -24,6 +24,10 @@ LV_FONT_DECLARE(font_inter_20);
 static lv_obj_t* bar        = nullptr;
 static lv_obj_t* pill       = nullptr;
 static lv_obj_t* lbl_clock  = nullptr;
+static lv_obj_t* lbl_link_gh = nullptr;   // the ghost shadows (the legibility)
+static lv_obj_t* lbl_batt_gh = nullptr;
+static lv_obj_t* clk_ghost   = nullptr;
+static constexpr int GHOST_DY = 2;   // the text shadow's drop (px)
 static lv_obj_t* lbl_link   = nullptr;   // BLE + WiFi glyphs
 static lv_obj_t* lbl_batt   = nullptr;
 
@@ -51,8 +55,11 @@ static void refresh_link(void) {
              s_wifi_up ? PH_WIFI " " : "",
              s_ble == BLE_STATE_CONNECTED ? PH_BLUETOOTH : "");
     lv_label_set_text(lbl_link, buf);
-    lv_obj_set_style_text_color(lbl_link,
-        (s_ble == BLE_STATE_CONNECTED || s_wifi_up) ? THEME_TEXT : THEME_DIM, 0);
+    lv_obj_set_style_text_color(lbl_link, lv_color_hex(0xE5E5EA), 0);
+    if (lbl_link_gh) {
+        lv_label_set_text(lbl_link_gh, buf);
+        lv_obj_align_to(lbl_link_gh, lbl_batt_gh, LV_ALIGN_OUT_LEFT_MID, -8, GHOST_DY);
+    }
 }
 
 static void refresh_battery(void) {
@@ -71,7 +78,12 @@ static void refresh_battery(void) {
     else                 snprintf(buf, sizeof(buf), "%s", glyph);
     lv_label_set_text(lbl_batt, buf);
     lv_obj_set_style_text_color(lbl_batt,
-        (!s_charging && s_batt_pct >= 0 && s_batt_pct <= 10) ? THEME_RED : THEME_DIM, 0);
+        (!s_charging && s_batt_pct >= 0 && s_batt_pct <= 10) ? THEME_RED
+            : lv_color_hex(0xF2F2F7), 0);
+    if (lbl_batt_gh) {
+        lv_label_set_text(lbl_batt_gh, buf);
+        lv_obj_align(lbl_batt_gh, LV_ALIGN_RIGHT_MID, -(SB_PAD_X + 14), GHOST_DY);
+    }
 }
 
 void statusbar_init(lv_obj_t* parent) {
@@ -100,10 +112,13 @@ void statusbar_init(lv_obj_t* parent) {
     lv_obj_set_style_radius(pill, pill_h / 2, 0);
     // Transmission recipe (critic r2): cream @low-opa over the wallpaper's
     // own color so the backlight shows through (was solid cream @175).
-    lv_obj_set_style_bg_color(pill, lv_color_mix(THEME_BG_TOP, SHEEN_TINT, 40), 0);
-    lv_obj_set_style_bg_opa(pill, 130, 0);
-    lv_obj_set_style_bg_grad_color(pill, lv_color_mix(THEME_BG_BOT, SHEEN_TINT, 60), 0);
-    lv_obj_set_style_bg_grad_opa(pill, 190, 0);
+    // Photo-wall backdrop: the pill needs real opacity to read (the glass
+    // 130 was tuned for the dark duotone; over a photo it turned mushy).
+    // iOS-home status treatment: a deep neutral scrim, near-opaque.
+    lv_obj_set_style_bg_color(pill, lv_color_mix(THEME_BG_BOT, lv_color_hex(0x000000), 55), 0);
+    lv_obj_set_style_bg_opa(pill, 215, 0);
+    lv_obj_set_style_bg_grad_color(pill, lv_color_mix(THEME_BG_BOT, lv_color_hex(0x000000), 25), 0);
+    lv_obj_set_style_bg_grad_opa(pill, 235, 0);
     lv_obj_set_style_bg_grad_dir(pill, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(pill, 0, 0);
     lv_obj_set_style_bg_grad_stop(pill, 255, 0);
@@ -163,12 +178,17 @@ void statusbar_init(lv_obj_t* parent) {
     lbl_clock = lv_label_create(bar);
     lv_label_set_text(lbl_clock, "--:--");
     lv_obj_set_style_text_font(lbl_clock, &font_inter_20, 0);
-    lv_obj_set_style_text_color(lbl_clock, THEME_TEXT, 0);
+    lv_obj_set_style_text_color(lbl_clock, lv_color_hex(0xffffff), 0);
     lv_obj_align(lbl_clock, LV_ALIGN_LEFT_MID, SB_PAD_X, 0);
 
     lbl_batt = lv_label_create(bar);
     lv_obj_set_style_text_font(lbl_batt, &font_inter_20, 0);
-    lv_obj_set_style_text_color(lbl_batt, THEME_DIM, 0);
+    lv_obj_set_style_text_color(lbl_batt, lv_color_hex(0xF2F2F7), 0);
+    lbl_batt_gh = lv_label_create(bar);
+    lv_obj_set_style_text_font(lbl_batt_gh, &font_inter_20, 0);
+    lv_obj_set_style_text_color(lbl_batt_gh, lv_color_hex(0x0a0f14), 0);
+    lv_obj_set_style_text_opa(lbl_batt_gh, 140, 0);
+    lv_obj_align(lbl_batt_gh, LV_ALIGN_RIGHT_MID, -(SB_PAD_X + 14), GHOST_DY);
     // Rounded-corner clearance: at the bar's height the corner curve eats
     // everything past ~x446; the battery row gets a deeper inset than the
     // clock's so the glyph's cap survives it.
@@ -176,8 +196,12 @@ void statusbar_init(lv_obj_t* parent) {
 
     lbl_link = lv_label_create(bar);
     lv_obj_set_style_text_font(lbl_link, &font_inter_20, 0);
-    lv_obj_set_style_text_color(lbl_link, THEME_DIM, 0);
+    lv_obj_set_style_text_color(lbl_link, lv_color_hex(0xE5E5EA), 0);
     lv_obj_align_to(lbl_link, lbl_batt, LV_ALIGN_OUT_LEFT_MID, -8, 0);
+    lbl_link_gh = lv_label_create(bar);
+    lv_obj_set_style_text_font(lbl_link_gh, &font_inter_20, 0);
+    lv_obj_set_style_text_color(lbl_link_gh, lv_color_hex(0x0a0f14), 0);
+    lv_obj_set_style_text_opa(lbl_link_gh, 140, 0);
 
     if (!board_caps().has_battery) {
         lv_obj_add_flag(lbl_batt, LV_OBJ_FLAG_HIDDEN);
@@ -186,6 +210,10 @@ void statusbar_init(lv_obj_t* parent) {
 
     refresh_link();
     refresh_battery();
+    // The ghosts mirror their live labels (one relayout point).
+    if (clk_ghost) {
+        lv_label_set_text(clk_ghost, lv_label_get_text(lbl_clock));
+    }
 }
 
 void statusbar_tick(void) {
