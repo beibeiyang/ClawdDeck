@@ -1,3 +1,6 @@
+# IDE
+.idea/
+
 # PlatformIO build artifacts
 firmware/.pio/
 firmware/.vscode/
