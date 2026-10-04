@@ -16,7 +16,9 @@ LV_FONT_DECLARE(font_inter_20);
 
 // Where the glass pill sits: a thin iOS-style lozenge behind the status row,
 // inset a few px from the panel edges so its rim catches light clearly.
-#define SB_PILL_PAD_X   6
+// The panel's physical rounded corners cut any content near the top corners;
+// the pill is inset far enough that its rim clears the curve entirely.
+#define SB_PILL_PAD_X   10
 #define SB_PILL_PAD_TOP 3
 
 static lv_obj_t* bar        = nullptr;
@@ -167,7 +169,10 @@ void statusbar_init(lv_obj_t* parent) {
     lbl_batt = lv_label_create(bar);
     lv_obj_set_style_text_font(lbl_batt, &font_inter_20, 0);
     lv_obj_set_style_text_color(lbl_batt, THEME_DIM, 0);
-    lv_obj_align(lbl_batt, LV_ALIGN_RIGHT_MID, -SB_PAD_X, 0);
+    // Rounded-corner clearance: at the bar's height the corner curve eats
+    // everything past ~x446; the battery row gets a deeper inset than the
+    // clock's so the glyph's cap survives it.
+    lv_obj_align(lbl_batt, LV_ALIGN_RIGHT_MID, -(SB_PAD_X + 14), 0);
 
     lbl_link = lv_label_create(bar);
     lv_obj_set_style_text_font(lbl_link, &font_inter_20, 0);

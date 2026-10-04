@@ -310,9 +310,37 @@ static void glass_tile(lv_obj_t* icon, const AppDef* d, int radius, int row) {
 // wall image + N tile images per strip — bitmap-class cost.
 static constexpr int BAKE_MARGIN = 20;   // covers shadow (ofs 5 + width 14) + outline 1
 
+static lv_draw_buf_t* wall_flat = nullptr;   // the flattened duotone (when the stack path ran)
+static bool wall_is_photo() { return wall_flat == nullptr; }   // covers shadow (ofs 5 + width 14) + outline 1
+
 // Build the live-glass tile into 'parent' at (0,0) — the exact glass_tile
 // recipe, used once per tile inside the bake scratch.
 static void build_tile_glass(lv_obj_t* tile, const AppDef* d, int row, bool pressed);
+
+// Local average of the compiled photo wallpaper behind a screen rect — the
+// bake's "what the glass actually sits over" color, used to key the lift so
+// the tile reads as glass on THIS photo (not on the old duotone's tones).
+// the lift key = set by the caller (the local photo average, or the duotone
+// tone in the fallback path).
+static lv_color_t g_lift_key;
+
+static lv_color_t photo_avg_at(int x, int y, int w, int h) {
+    extern const lv_image_dsc_t img_wall_photo;
+    const uint8_t* p = (const uint8_t*)img_wall_photo.data;
+    const int W = img_wall_photo.header.w, H = img_wall_photo.header.h;
+    uint32_t ar = 0, ag = 0, ab = 0; uint32_t n = 0;
+    for (int yy = y; yy < y + h; yy += 4) {
+        for (int xx = x; xx < x + w; xx += 4) {
+            if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+            const uint16_t v = (uint16_t)(p[2 * (yy * W + xx)] | (p[2 * (yy * W + xx) + 1] << 8));
+            const int r5 = (v >> 11) & 31, g6 = (v >> 5) & 63, b5 = v & 31;
+            ar += (r5 * 255 + 15) / 31; ag += (g6 * 255 + 31) / 63; ab += (b5 * 255 + 15) / 31;
+            n++;
+        }
+    }
+    if (!n) return wall_base_at(0);
+    return lv_color_make((uint8_t)(ar / n), (uint8_t)(ag / n), (uint8_t)(ab / n));
+}
 
 static lv_draw_buf_t* bake_tile(lv_obj_t* scratch_root, const AppDef* d,
                                 int icon_x, int cell_y, int tile, int radius,
@@ -328,20 +356,31 @@ static lv_draw_buf_t* bake_tile(lv_obj_t* scratch_root, const AppDef* d,
     lv_obj_set_style_pad_all(area, 0, 0);
     lv_obj_clear_flag(area, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(area, LV_OBJ_FLAG_CLICKABLE);
-    // The flattened wallpaper behind (a child image at the negative slot
-    // offset — pixel-exact backdrop for this tile's halo).
-    extern lv_draw_buf_t* launcher_wall_flat(void);
-    const lv_draw_buf_t* wall = launcher_wall_flat();
-    if (wall) {
+    // The wallpaper behind (a child image at the negative slot offset —
+    // pixel-exact backdrop for this tile's halo): the photo asset when
+    // compiled in, else the flattened duotone stack.
+    const void* wall_src = nullptr;
+    if (wall_flat) {
+        wall_src = wall_flat;
+    } else {
+        extern const lv_image_dsc_t img_wall_photo;
+        wall_src = &img_wall_photo;   // the compiled-in photo wall
+    }
+    if (wall_src) {
         lv_obj_t* wl = lv_image_create(area);
-        lv_image_set_src(wl, (const lv_image_dsc_t*)wall);
+        lv_image_set_src(wl, (const lv_image_dsc_t*)wall_src);
         lv_obj_set_pos(wl, -(icon_x + BAKE_MARGIN), -(cell_y + BAKE_MARGIN));
         lv_obj_clear_flag(wl, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_clear_flag(wl, LV_OBJ_FLAG_CLICKABLE);
     } else if (!wall_missing_warned) {
         wall_missing_warned = true;
-        Serial.println("[bake] no flattened wall: tiles bake on flat local tone");
+        Serial.println("[bake] no wall source: tiles bake on flat local tone");
     }
+
+    // Key the glass lift to what actually sits behind this slot: the
+    // compiled photo's local average (or the duotone tone in fallback).
+    g_lift_key = wall_flat ? wall_base_at(row)
+                           : photo_avg_at(icon_x, cell_y, tile, tile);
 
     lv_obj_t* body = lv_obj_create(area);
     lv_obj_set_size(body, tile, tile);
@@ -373,7 +412,7 @@ static void build_tile_glass(lv_obj_t* tile, const AppDef* d, int row, bool pres
     const int  rim_opa    = pressed ? 120 : 95;
     const int  shadow_opa = pressed ? 60 : 25;
     const lv_color_t hue  = lv_color_hex(d->tile_rgb);
-    const lv_color_t wall = wall_base_at(row);
+    const lv_color_t wall = g_lift_key;
 
     lv_obj_set_style_bg_color(tile,
         lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 165), 0);
@@ -502,10 +541,6 @@ static void make_tile(lv_obj_t* page, int slot, int app_index) {
     lv_obj_set_pos(label, cell_x, cell_y + G.tile + G.label_gap);
 }
 
-static lv_draw_buf_t* wall_flat = nullptr;   // the flattened wallpaper (held)
-
-lv_draw_buf_t* launcher_wall_flat(void) { return wall_flat; }
-
 static void refresh_dots(void) {
     if (!dots_row) return;
     const int active = (page_count > 1)
@@ -574,33 +609,20 @@ void launcher_init(lv_obj_t* parent) {
     lv_obj_set_pos(root, 0, 0);
     lv_obj_set_style_border_width(root, 0, 0);
     lv_obj_set_style_pad_all(root, 0, 0);
-    // Wallpaper: the full layer stack (duotone + washes + light dome) is
-    // built once into a throwaway container and snapshot-flattened to ONE
-    // opaque RGB565 image (lv_image). A horizontal swipe dirties the whole
-    // grid area every frame — re-blending ~10 gradient layers per strip per
-    // frame was the swipe cost; post-flatten the wall is a single blit.
-    // Verified pixel-identical to the live stack in the sim.
-    lv_obj_t* wall = lv_obj_create(root);
-    lv_obj_set_size(wall, W, H);
-    lv_obj_set_pos(wall, 0, 0);
-    lv_obj_set_style_border_width(wall, 0, 0);
-    lv_obj_set_style_pad_all(wall, 0, 0);
-    lv_obj_clear_flag(wall, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(wall, LV_OBJ_FLAG_CLICKABLE);
-    build_wallpaper(wall, W, H);
-    lv_obj_update_layout(wall);
-    wall_flat = lv_snapshot_take(wall, LV_COLOR_FORMAT_RGB565);
-    lv_obj_delete(wall);
-    if (wall_flat) {
+    // Wallpaper: the Waveshare Lake-Quinault reference photo (the factory
+    // look the user asked for), baked as a 480x480 RGB565 asset — already
+    // ONE opaque image, so the round-1 snapshot flatten = unnecessary here;
+    // the duotone stack remains the fallback (sim/no-asset path).
+    // Tile bakes composite the wallpaper behind each slot, so the glass
+    // picks up the photo's light per-slot with no recipe changes.
+    {
+        extern const lv_image_dsc_t img_wall_photo;
         lv_obj_t* wall_img = lv_image_create(root);
-        lv_image_set_src(wall_img, (const lv_image_dsc_t*)wall_flat);
+        lv_image_set_src(wall_img, &img_wall_photo);
         lv_obj_set_pos(wall_img, 0, 0);
         lv_obj_clear_flag(wall_img, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_clear_flag(wall_img, LV_OBJ_FLAG_CLICKABLE);
-        // wall_flat stays allocated for the launcher's lifetime (PSRAM on
-        // hardware): ~W*H*2 bytes of RAM buys one-op swipes. Lean trade.
-    } else {
-        build_wallpaper(root, W, H);   // snapshot unsupported: keep live stack
+        // wall_flat stays null: the tile bakes reference the photo directly.
     }
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
