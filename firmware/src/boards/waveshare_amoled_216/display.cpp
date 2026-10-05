@@ -100,6 +100,28 @@ void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h,
     gfx->draw16bitRGBBitmap(dx, dy, rot_buf, dw, dh);
 }
 
+// Full-panel composite paint for the bypass swipe engine: pixels are the
+// FULL 480x480 display-facing frame (page bakes composited at swipe_offset).
+// One draw call, no rotate (orientation is baked into the composite below).
+void display_hal_paint_full(const uint16_t* pixels) {
+    if (!gfx) return;
+    uint8_t r = imu_hal_rotation_quadrant();
+    if (r == 0 || !rot_buf || !pixels) {
+        gfx->draw16bitRGBBitmap(0, 0, (uint16_t*)pixels, LCD_WIDTH, LCD_HEIGHT);
+        return;
+    }
+    // full-frame rotate into rot_buf (40-line strips: no big temp needed —
+    // rotate_strip is row-local, run the whole frame through it in strips)
+    for (int sy = 0; sy < LCD_HEIGHT; sy += ROT_BUF_LINES) {
+        int rows = LCD_HEIGHT - sy; if (rows > ROT_BUF_LINES) rows = ROT_BUF_LINES;
+        int32_t dx, dy, dw, dh;
+        rotate_strip(pixels + (size_t)sy * LCD_WIDTH, LCD_WIDTH, rows,
+                     0, sy, r, &dx, &dy, &dw, &dh);
+        gfx->draw16bitRGBBitmap(dx, dy, rot_buf, dw, dh);
+    }
+}
+
+
 // On rotation change, force a full LVGL redraw at the new orientation.
 // Gravity Ball temporarily freezes imu_hal_rotation_quadrant(), so this stays
 // stable while that app is open and resumes as soon as the app closes.

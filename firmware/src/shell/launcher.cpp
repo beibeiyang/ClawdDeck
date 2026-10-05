@@ -15,6 +15,14 @@ LV_FONT_DECLARE(font_phos_40);
 LV_FONT_DECLARE(font_phos_28);
 LV_FONT_DECLARE(font_phos_20);
 LV_FONT_DECLARE(font_phos_fill_96);
+
+#include <math.h>
+#include <string.h>
+#ifdef BOARD_SIM
+#include "boards/sim/shim/esp_heap_caps.h"
+#else
+#include <esp_heap_caps.h>
+#endif
 LV_FONT_DECLARE(font_phos_fill_64);
 
 // Space kept clear at the bottom for the page dots and the home pill.
@@ -432,10 +440,12 @@ static void make_tile(lv_obj_t* page, int slot, int app_index) {
     lv_obj_set_pos(label, cell_x, cell_y + G.tile + G.label_gap);
 }
 
+int swipe_page_active(void);        // engine forward decl (defined below)
+
 static void refresh_dots(void) {
     if (!dots_row) return;
     const int active = (page_count > 1)
-        ? (lv_obj_get_scroll_x(pages) + board_caps().width / 2) / board_caps().width
+        ? (int)swipe_page_active()
         : 0;
     for (int i = 0; i < page_count; i++) {
         lv_obj_t* dot = lv_obj_get_child(dots_row, i);
@@ -449,46 +459,340 @@ static void scroll_cb(lv_event_t* e) {
     refresh_dots();
 }
 
-// ---- Swipe bench (sim diagnostics only) ------------------------------------
-// Drives a scripted horizontal swipe (24px/frame for ~1s) and prints the
-// wall-clock per frame, so render-cost changes measure directly in the sim.
-#ifdef BOARD_SIM
+// ---- swipe engine state ----------------------------------------------------
+// One frame paints engine band rows from baked page bitmaps straight to GRAM:
+// the moving edge = each frame's tile rows, the stable remainder sits behind.
+// GRAM auto-increments the write pointer, so painting successive row bands
+// left-to-right costs only the actual slide distance per frame.
+// The swipe engine = ON TOP of the live widget stack (transparent lv_image
+// OVERLAY on the top layer during a swipe; the live tiles hide, not render).
+enum SwipePhase { SWIPE_IDLE, SWIPE_TOUCH, SWIPE_SETTLE };
+static SwipePhase swipe_state = SWIPE_IDLE;
+static float   swipe_offset = 0;        // page-space scroll (0 = page 0 home)
+static float   swipe_frac = 0;          // settle frac 0..1
+static uint32_t swipe_start_ms = 0;
+static int16_t swipe_touch_x = 0;
+static int     page_visible = 0;        // settled page
+static bool    swipe_move_seen = false;   // a real move() arrived this touch
+static bool    latch_seen = false;        // arm-on-intent: latch currently down
+static int16_t latch_x = 0, latch_y = 0;
+static uint16_t* band_buf = nullptr;   // W×STRIP scratch (PSRAM)
+static float painted_offset = 0;        // GRAM truth: last painted offset
+static lv_draw_buf_t* page_bakes[8] = {};
+
+static bool bench_drives = false;   // bench script owns the touch stream (tick skips the latch)
+
+static float engine_curve(float t) {
+    return t < 0 ? 0 : (t > 1 ? 1 : (1 - t) * (1 - t) * (3 - 2 * t));
+}
+#define TAP_MS 220
+
+
+void launcher_swipe_tick(void);
+static void swipe_settle(float target_off, bool immediate);
+static struct timespec bench_t0;
+static void engine_render(void);
+extern "C" void lv_display_render_inhibit_set(uint8_t v);
+#include "../../src/hal/touch_hal.h"
+
+// ---- Swipe bench (serial 'bench') ------------------------------------------
+// Drives a scripted horizontal swipe and prints the wall-clock per frame, so
+// render+flush cost measures directly — sim AND hardware.
 #include <time.h>
-static lv_obj_t* bench_pages = nullptr;
+#include <math.h>
+#include <string.h>
 static int bench_frame = 0;
-static struct timespec bench_t0 = {0, 0};
-static uint64_t bench_ns_sum = 0;
+static float bench_first = 0, bench_sum = 0;   // frame 0 (warmup/tap) excluded
 void launcher_bench_start(void);
 void launcher_bench_tick(void);
 void launcher_bench_start(void) {
-    bench_pages = pages;
+    if (page_count <= 1 || !root) return;
     bench_frame = 0;
-    bench_ns_sum = 0;
-    clock_gettime(CLOCK_MONOTONIC, &bench_t0);
-    Serial.println("[bench] swipe render bench: start");
+    bench_first = 0; bench_sum = 0;
+    bench_drives = true;
+    Serial.println("[bench] engine swipe bench: start");
+    // one scripted swipe: press x=100, sweep to x=100+W over ~14 bench frames,
+    // release; settle anim measured separately (swipe_state==SETTLE frames).
+    lv_obj_scroll_to_x(pages, 0, LV_ANIM_OFF);
+    page_visible = 0;
+    bench_frame = -1;                       // -1 = next tick arms the press
 }
 void launcher_bench_tick(void) {
-    if (!bench_pages || bench_frame >= 40) {
-        if (bench_pages && bench_frame >= 40) {
-            Serial.printf("[bench] done: 40 frames, avg %.2f ms/frame\n",
-                          (double)bench_ns_sum / 40.0 / 1e6);
-            lv_obj_scroll_to_x(bench_pages, 0, LV_ANIM_OFF);
-            bench_pages = nullptr;
-        }
+    extern volatile uint32_t bench_flush_px;
+    extern volatile uint32_t bench_flush_calls;
+    extern volatile uint32_t bench_flush_last_w, bench_flush_last_h;
+    if (bench_frame == -2) return;                       // sweep done
+    if (bench_frame == -1) {                             // arm the scripted press
+        bench_frame = 0;
+        launcher_swipe_press(100, 240);
+        Serial.println("[bench] press armed");
+        // consume the FIRST latch-up in arm_tick (it is the stale-read, not a lift)
+        uint16_t x, y; bool p; touch_hal_read(&x, &y, &p);
+        (void)x; (void)y;
         return;
     }
     clock_gettime(CLOCK_MONOTONIC, &bench_t0);
-    lv_obj_scroll_by(bench_pages, -24, 0, LV_ANIM_OFF);
-    lv_refr_now(NULL);
-    struct timespec t1;
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-    long long dt = (t1.tv_sec - bench_t0.tv_sec) * 1000000000LL
-                 + (t1.tv_nsec - bench_t0.tv_nsec);
-    if (bench_frame > 0) bench_ns_sum += dt;   // frame 0 = warmup
-    Serial.printf("[bench] f%02d %6.2f ms\n", bench_frame, dt / 1e6);
-    bench_frame++;
+    if (swipe_state == SWIPE_TOUCH && bench_frame < 14) { // tracked move frames
+        const int x = 100 + (bench_frame + 1) * (board_caps().width + 60) / 14;
+        launcher_swipe_move(x, 240);
+        lv_display_render_inhibit_set(1);   // bench-driven frame
+        engine_render();
+        lv_tick_inc(20);
+        struct timespec t1; clock_gettime(CLOCK_MONOTONIC, &t1);
+        float dt = (t1.tv_sec - bench_t0.tv_sec) * 1000.0f
+                 + (t1.tv_nsec - bench_t0.tv_nsec) / 1e6f;
+        if (bench_first == 0) bench_first = dt;
+        else bench_sum += dt;
+        Serial.printf("[bench] f%02d %6.2f ms  flush_px=%lu calls=%lu last=%lux%lu\n",
+                      bench_frame++, dt, (unsigned long)bench_flush_px,
+                      (unsigned long)bench_flush_calls,
+                      (unsigned long)bench_flush_last_w, (unsigned long)bench_flush_last_h);
+        return;
+    }
+    if (bench_frame <= 14) {                             // release → settle anim
+        launcher_swipe_release();
+        bench_frame = 15;
+    }
+    lv_tick_inc(20);
+    launcher_swipe_tick();
+    struct timespec t1; clock_gettime(CLOCK_MONOTONIC, &t1);
+    float dt = (t1.tv_sec - bench_t0.tv_sec) * 1000.0f
+             + (t1.tv_nsec - bench_t0.tv_nsec) / 1e6f;
+    Serial.printf("[bench] s%02d %6.2f ms\n", bench_frame - 15, dt);
+    if (swipe_state == SWIPE_IDLE && bench_frame > 15) {
+        Serial.printf("[bench] done: avg %.2f ms/frame | settled page=%d offset=%.0f state=%d scroll_x=%ld\n",
+                      bench_sum / 13, page_visible, (double)swipe_offset,
+                      (int)swipe_state,
+                      (long)lv_obj_get_scroll_x(pages));
+        bench_frame = -2;
+        bench_drives = false;
+    } else bench_frame++;
 }
-#endif // BOARD_SIM
+
+// ============================================================================
+// PAGE BAKE + BYPASS SWIPE ENGINE (the factory-firmware approach, measured)
+// ============================================================================
+// The live-widget page swipe re-renders ~195kpx per frame (2.16 measured:
+// 100+ ms/frame = 10 FPS — the chop). Factory UIs slide prepared bitmaps. So:
+// bake each page's tile area ONCE into PSRAM, keep the transparent LVGL page
+// scroll for layout/tap truth, and from swipe-down paint each frame's GRAM
+// band directly from the page bitmaps. LVGL renders no tiles mid-swipe; when
+// the settle finishes, the pages scroll snaps and control hands back.
+// RAM: pages × W × grid_h × 2 B in PSRAM (2 pages on the 2.16 = 1.5 MB).
+// Sim note: engine paints via display_hal (SDL frame driver), identical path.
+#include "draw/snapshot/lv_snapshot.h"
+#include "../../src/hal/display_hal.h"
+#include "../../src/hal/touch_hal.h"
+
+#define STRIP 40   // engine render strip (matches main.cpp BUF_LINES)
+
+// ---- page bake: snapshot the transparent page container ----
+// The container carries no bg/border/pad; the tiles inside are opaque
+// squircles with baked-outside shadow edges (BLANK_TILE + solid bg). Corners
+// show BLANK_TILE, not the wallpaper (the live wallpaper keeps showing
+// between the bakes as usual — the bake itself is opaque ONLY where tiles
+// are: the snapshot records exactly what the container paints, plus shadow
+// fringe pixels which read fine over the wall).
+static lv_draw_buf_t* bake_page(int p) {
+    const int W = board_caps().width;
+    lv_obj_t* page = lv_obj_get_child(pages, p);
+    if (!page) return nullptr;
+    lv_obj_update_layout(page);
+    return lv_snapshot_take(page, LV_COLOR_FORMAT_RGB565);
+}
+
+static void engine_render(void) {
+    const int W = board_caps().width;
+    const int H = board_caps().height;
+    if (!band_buf) return;
+    // Moved-band strategy: paint ONLY the panel columns the seam crossed this
+    // frame (painted_offset → swipe_offset). Frame cost ∝ |dx| (a tracked
+    #ifdef BOARD_HAS_PSRAM
+    int old_x = (int)floorf(-painted_offset / (float)W);
+    int new_x = (int)floorf(-swipe_offset / (float)W);
+    int x_lo = (old_x < new_x) ? old_x : new_x;
+    int x_hi = (old_x < new_x) ? new_x : old_x;
+    if (x_hi <= x_lo) x_hi = x_lo + 1;               // ≥1px always moves
+    if (x_lo < 0) x_lo = 0;
+    if (x_hi > W) x_hi = W;
+    if (x_hi <= x_lo) { painted_offset = swipe_offset; return; }
+    const int bw = x_hi - x_lo;
+    // 1) tile rows of the band: composite from the LVGL-space bakes
+    const int gh = G.grid_h;
+    const int sA = (int)floorf(-swipe_offset / (float)W);
+    const float offmod = -swipe_offset - (float)sA * (float)W;
+    const int frac = (int)(offmod + 0.5f);
+    const lv_draw_buf_t* A = (sA >= 0 && sA < page_count) ? page_bakes[sA] : nullptr;
+    const lv_draw_buf_t* B = (sA + 1 >= 0 && sA + 1 < page_count) ? page_bakes[sA + 1] : nullptr;
+    const uint16_t* a = A ? (const uint16_t*)A->data : nullptr;
+    const uint16_t* b = B ? (const uint16_t*)B->data : nullptr;
+    // full-height composite band in LVGL space, then row-strip-rotate-push:
+    // process in 40-row strips so band_buf stays small; rotate_strip maps a
+    // sub-rect (sx,sy,w,h) of the LVGL frame into panel coords.
+    for (int sy = 0; sy < H; sy += STRIP) {
+        const int rows = (H - sy < (int)STRIP) ? H - sy : (int)STRIP;
+        for (int r = 0; r < rows; r++) {
+            uint16_t* dst = band_buf + (size_t)r * bw;
+            const int lvgl_y = sy + r;
+            const bool in_tiles = (lvgl_y >= STATUSBAR_H && lvgl_y < STATUSBAR_H + gh);
+            const int bake_y = lvgl_y - STATUSBAR_H;
+            for (int x = 0; x < bw; x++) {
+                int px = 0;
+                uint16_t c = lv_color_to_u16(THEME_BG);
+                if (in_tiles) {
+                    const int lvgl_x = x_lo + x;
+                    px = lvgl_x + sA * W + frac;    // bake A column of this px
+                    int bpx = px - W;
+                    if (a && px >= 0 && px < W)
+                        c = a[(size_t)bake_y * W + px];
+                    else if (b && bpx >= 0 && bpx < W)
+                        c = b[(size_t)bake_y * W + bpx];
+                    else
+                        c = lv_color_to_u16(THEME_BG);  // beyond both bakes
+                }
+                dst[x] = c;
+            }
+        }
+        // 2) push the band through the display: the frame sub-rect (x_lo, sy,
+        //    bw, rows) of LVGL space — rotate_strip maps it to panel coords.
+        display_hal_draw_bitmap(x_lo, sy, bw, rows, band_buf);
+    }
+    painted_offset = swipe_offset;
+    #endif
+}
+// frame strip rows which CROSS chrome boundaries (statusbar/tile area)
+// render-suppression hooks the engine flips for its own frames.
+// C linkage: the lvgl library is C — the inhibit hook is read from C code
+// (lv_refr.c / lv_draw_sw.c RENDER_INHIBIT patches), so it must match.
+static bool engine_inhibit = false;
+extern "C" uint8_t lv_display_render_inhibit_get(void) { return engine_inhibit ? 1 : 0; }
+extern "C" void lv_display_render_inhibit_set(uint8_t v) { engine_inhibit = v != 0; }
+
+// --- lv_refr.c / lv_draw_sw.c render-inhibit enforcement (v9.2 libdeps) ---
+// (auto-patched by a session script; see .session-state.md; re-run
+// tools/verify_refr_patch.sh after a libdeps re-fetch.)
+
+
+// bake all pages into page_bakes (8 max)
+static void bake_all_pages(void) {
+    for (int p = 0; p < page_count && p < 8; p++) page_bakes[p] = bake_page(p);
+    int ok = 0;
+    for (int p = 0; p < page_count && p < 8; p++) if (page_bakes[p]) ok++;
+    Serial.printf("[engine] baked %d/%d pages\n", ok, page_count);
+}
+
+// ---- engine tick: TOUCH tracking + SETTLE anim ------------------------------
+void launcher_swipe_press(int x, int y) {
+    (void)y;
+    if (page_count <= 1 || !root) return;
+    // arm the engine: inhibit LVGL rendering while the band owns the paint
+    lv_display_render_inhibit_set(1);
+    swipe_state = SWIPE_TOUCH;
+    swipe_touch_x = x;
+    swipe_start_ms = lv_tick_get();
+    swipe_frac = 0;
+    swipe_move_seen = false;
+    painted_offset = -(float)page_visible * (float)board_caps().width;
+}
+
+void launcher_swipe_move(int x, int y) {
+    (void)y;
+    if (swipe_state != SWIPE_TOUCH) return;
+    swipe_move_seen = true;
+    const int dx = x - swipe_touch_x;
+    const int W = board_caps().width;
+    // follow the finger with overscroll resistance at the ends
+    float v = -page_visible * (float)W + dx;
+    const float lo = 0, hi = (float)(page_count - 1) * W;
+    if (v < lo) v = lo + (v - lo) * 0.35f;
+    if (v > hi) v = hi + (v - hi) * 0.35f;
+    swipe_offset = -v;
+}
+
+void launcher_swipe_release(void) {
+    if (swipe_state != SWIPE_TOUCH) return;
+    const int W = board_caps().width;
+    const float pos = -swipe_offset / W;         // 0..page_count-1 position
+    const bool moved_far = fabsf(pos - page_visible) > 0.32f;
+    // Tap (brief + small move) = no page change (tile tap handling proceeds)
+    if (lv_tick_get() - swipe_start_ms < TAP_MS && !moved_far) {
+        swipe_state = SWIPE_IDLE;
+        return;
+    }
+    swipe_settle(roundf(pos) * -(float)W, false);   // page k lives at -k*W
+}
+
+static float settle_from   = 0;   // offset when settle started
+static float settle_target = 0;
+
+static void swipe_settle(float target_off, bool immediate) {
+    settle_target = target_off;
+    settle_from   = swipe_offset;
+    if (immediate) swipe_offset = target_off;
+    swipe_state  = SWIPE_SETTLE;
+    swipe_start_ms = lv_tick_get();
+    swipe_frac   = immediate ? 1 : 0;
+}
+
+void launcher_swipe_tick(void) {
+    const int W = board_caps().width;
+    switch (swipe_state) {
+    case SWIPE_TOUCH: {
+        if (!bench_drives) {
+            uint16_t x, y; bool p;
+            touch_hal_read(&x, &y, &p);   // same latch LVGL reads: no steal
+                if (p) { lv_display_render_inhibit_set(1); launcher_swipe_move(x, y); engine_render(); return; }
+            // Latch reads UP: settle from wherever we got to (move_seen
+            // guards a stale latch: press with no fresh sample anywhere).
+            if (!swipe_move_seen) { swipe_state = SWIPE_IDLE; break; }
+            const float pos = -swipe_offset / (float)W;
+            swipe_settle(roundf(pos) * -(float)W, false);
+        }
+        break;
+    }
+    case SWIPE_SETTLE: {
+        const uint32_t el = lv_tick_get() - swipe_start_ms;
+        swipe_frac = engine_curve(el / 190.0f);      // ~190ms settle (iOS feel)
+        swipe_offset = settle_from
+                     + (settle_target - settle_from) * swipe_frac;
+        lv_display_render_inhibit_set(1);
+        engine_render();
+        if (el >= 190) {
+            // hand back to LVGL: the last engine frame IS the settled state
+            // (no full invalidate: the exact pixels are already on glass)
+            page_visible = (int)roundf(-swipe_offset / (float)W);
+            swipe_state = SWIPE_IDLE;
+            lv_obj_scroll_to_x(pages, page_visible * (float)W, LV_ANIM_OFF);
+            painted_offset = swipe_offset;
+            lv_display_render_inhibit_set(0);
+            refresh_dots();
+        }
+        break;
+    }
+    case SWIPE_IDLE: {
+        // arm-on-intent: the latch is down and a horizontal move exceeds the
+        // tap threshold → the engine takes over (bypass swipe). Vertical /
+        #ifdef BOARD_HAS_PSRAM
+        uint16_t x, y; bool p;
+        touch_hal_read(&x, &y, &p);
+        if (p) {
+            if (!latch_seen) { latch_seen = true; latch_x = x; latch_y = y; }
+            const int dx = (int)x - latch_x, dy = (int)y - latch_y;
+            if ((dx > 12 || dx < -12)) {           // HORIZONTAL intent
+                launcher_swipe_press(latch_x, latch_y);
+                launcher_swipe_move(x, y);
+                engine_render();
+                return;
+            }
+        } else latch_seen = false;
+        #endif
+        break;
+    }
+    default: break;
+    }
+}
+
+int swipe_page_active(void) { return page_visible; }
 
 void launcher_init(lv_obj_t* parent) {
     compute_layout(board_caps());
@@ -586,13 +890,24 @@ void launcher_init(lv_obj_t* parent) {
         }
         refresh_dots();
     }
+
+    bake_all_pages();   // tile-area snapshots for the swipe engine
+
+    band_buf = (uint16_t*)heap_caps_malloc((size_t)board_caps().width
+                                           * STRIP * 2, MALLOC_CAP_SPIRAM);
+    if (!band_buf) Serial.println("[engine] band_buf alloc failed");
+
+#ifdef BOARD_SIM
+    Serial.println("[bench] sim: 'bench' cmd = scripted engine bench");
+#endif
 }
 
 void launcher_goto_page(int page) {
     if (!pages || page_count <= 1) return;
     if (page < 0)           page = 0;
     if (page >= page_count) page = page_count - 1;
-    lv_obj_scroll_to_x(pages, page * board_caps().width, LV_ANIM_OFF);
+    swipe_settle(-(float)page * board_caps().width, true);
+    page_visible = page;
     refresh_dots();
 }
 

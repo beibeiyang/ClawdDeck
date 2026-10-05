@@ -57,3 +57,13 @@ void display_hal_round_area(int32_t* x1, int32_t* y1, int32_t* x2, int32_t* y2) 
     *x2 = *x2 | 1;
     *y2 = *y2 | 1;
 }
+
+// Engine bypass-swipe not armed on this board: paint_full = full-panel blit
+__attribute__((weak))
+void display_hal_paint_full(const uint16_t* pixels) {
+    extern void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h, const uint16_t* pixels);
+    (void)pixels;
+}
+
+// Launcher bypass swipe engine is PSRAM-2.16-only; other boards never call it.
+void display_hal_paint_full(const uint16_t* pixels) { (void)pixels; }
