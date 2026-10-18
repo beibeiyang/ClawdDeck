@@ -10,3 +10,9 @@ size_t audio_in_hal_read_stereo(int16_t* out, size_t frames) {
     (void)frames;
     return 0;
 }
+
+size_t audio_in_hal_read_adpcm(uint8_t* out, size_t cap) {
+    (void)out;
+    (void)cap;
+    return 0;
+}

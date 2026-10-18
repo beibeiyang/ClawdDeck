@@ -145,6 +145,21 @@ const char* ble_bridge_take_rx(void) {
     return bridge_rx_buf;
 }
 
+// Voice dictation (sim): count chunks; on EOU, deliver a canned 'vt' reply so
+// the app's transcript path is exercisable end-to-end without a daemon.
+static int   sim_voice_chunks = 0;
+void ble_voice_send_chunk(uint8_t seq, uint8_t flags, const uint8_t* data, uint8_t len) {
+    (void)data; (void)len;
+    sim_voice_chunks++;
+    if (flags & 0x01) {   // end-of-utterance
+        printf("[sim] voice stream: %d chunks (seq %u EOU)\n", sim_voice_chunks, seq);
+        snprintf(bridge_rx_buf, sizeof(bridge_rx_buf),
+                 "{\"t\":\"vt\",\"tx\":\"sim transcript: the quick brown fox\"}");
+        bridge_pending = true;
+        sim_voice_chunks = 0;
+    }
+}
+
 void ble_keyboard_press(uint8_t key, uint8_t modifier) {
     printf("[sim] HID press key=0x%02X mod=0x%02X\n", key, modifier);
 }

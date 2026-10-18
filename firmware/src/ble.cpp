@@ -13,6 +13,7 @@
 #define REQ_CHAR_UUID       "4c41555a-4465-7669-6365-000000000004"  // device-initiated refresh request
 #define HOST_RX_CHAR_UUID   "4c41555a-4465-7669-6365-000000000005"  // host -> device bridge payloads
 #define DEV_CMD_CHAR_UUID   "4c41555a-4465-7669-6365-000000000006"  // device -> host bridge commands
+#define VOICE_CHAR_UUID     "4c41555a-4465-7669-6365-000000000007"  // device -> host voice chunks (binary)
 
 #define BLE_BUF_SIZE 512
 
@@ -65,6 +66,7 @@ static NimBLECharacteristic* rx_char = nullptr;
 static NimBLECharacteristic* req_char = nullptr;
 static NimBLECharacteristic* host_rx_char = nullptr;
 static NimBLECharacteristic* dev_cmd_char = nullptr;
+static NimBLECharacteristic* voice_char = nullptr;
 
 static ble_state_t state = BLE_STATE_INIT;
 static bool need_advertise = false;
@@ -391,6 +393,11 @@ void ble_init(void) {
         NIMBLE_PROPERTY::NOTIFY
     );
 
+    voice_char = svc->createCharacteristic(
+        VOICE_CHAR_UUID,
+        NIMBLE_PROPERTY::NOTIFY
+    );
+
     svc->start();
     server->start();
     start_advertising();
@@ -481,6 +488,23 @@ void ble_request_refresh(void) {
         req_char->notify();
         Serial.println("BLE: refresh requested");
     }
+}
+
+// ---- Voice dictation transport ---------------------------------------------
+// Chunk stream to the host over the VOICE characteristic: binary notifies of
+// [seq:u8][flags:u8][len:u8][payload...] (payload ≤ 244 = one ADPCM block).
+// flags bit0 = end-of-utterance. The SENDER paces itself: one notify per call
+// (the voice app's tick cadence ~ ms) — notify() drops silently when the
+// connection event budget is exhausted, seq numbers let the daemon resync.
+void ble_voice_send_chunk(uint8_t seq, uint8_t flags, const uint8_t* data, uint8_t len) {
+    if (state != BLE_STATE_CONNECTED || !voice_char) return;
+    static uint8_t buf[3 + 244];
+    buf[0] = seq;
+    buf[1] = flags;
+    if (len > 251) return;   // notify payload ≤ (MTU-3)-3; MTU≥185 ⇒ ≤182: keep len ≤ 180
+    if (len) memcpy(buf + 3, data, len);
+    voice_char->setValue((uint8_t*)buf, (size_t)3 + len);
+    voice_char->notify();
 }
 
 void ble_bridge_send_cmd(const char* json) {

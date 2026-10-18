@@ -14,3 +14,9 @@ void    audio_in_hal_tick(void);   // poll I2S while the capture app is open
 
 // Stereo interleaved samples @ 16 kHz for SpecAnalyzer FFT. Returns frames read.
 size_t audio_in_hal_read_stereo(int16_t* out, size_t frames);
+
+// ---- Voice dictation capture (dicate-to-panel) ----------------------------
+// 16 kHz mono PCM16, one IMA-ADPCM 4-bit block (241 bytes = 480 samples after
+// the header nibble) per call. Returns bytes written (0 = none this tick / no
+// mic). Boards without a mic path return 0.
+size_t audio_in_hal_read_adpcm(uint8_t* out, size_t cap);
