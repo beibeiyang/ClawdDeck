@@ -454,11 +454,6 @@ static void refresh_dots(void) {
     }
 }
 
-static void scroll_cb(lv_event_t* e) {
-    (void)e;
-    refresh_dots();
-}
-
 // ---- swipe engine state ----------------------------------------------------
 // One frame paints engine band rows from baked page bitmaps straight to GRAM:
 // the moving edge = each frame's tile rows, the stable remainder sits behind.
@@ -479,6 +474,10 @@ static int16_t latch_x = 0, latch_y = 0;
 static uint16_t* band_buf = nullptr;   // W×STRIP scratch (PSRAM)
 static float painted_offset = 0;        // GRAM truth: last painted offset
 static lv_draw_buf_t* page_bakes[8] = {};
+
+static uint32_t last_move_ms = 0;    // finger velocity tracking (flick test)
+static int16_t  prev_move_x = 0;
+static float    flick_v = 0;         // smoothed px/ms
 
 static bool bench_drives = false;   // bench script owns the touch stream (tick skips the latch)
 
@@ -689,6 +688,9 @@ void launcher_swipe_press(int x, int y) {
     lv_display_render_inhibit_set(1);
     swipe_state = SWIPE_TOUCH;
     swipe_touch_x = x;
+    prev_move_x = x;
+    last_move_ms = lv_tick_get();
+    flick_v = 0;
     swipe_start_ms = lv_tick_get();
     swipe_frac = 0;
     swipe_move_seen = false;
@@ -701,6 +703,14 @@ void launcher_swipe_move(int x, int y) {
     swipe_move_seen = true;
     const int dx = x - swipe_touch_x;
     const int W = board_caps().width;
+    // finger velocity (px/ms), smoothed — feeds the flick decision on release
+    const uint32_t now = lv_tick_get();
+    if (now != last_move_ms) {
+        const float inst = (float)(x - prev_move_x) / (float)(now - last_move_ms);
+        flick_v = 0.6f * flick_v + 0.4f * inst;
+        last_move_ms = now;
+        prev_move_x = x;
+    }
     // follow the finger with overscroll resistance at the ends
     float v = -page_visible * (float)W + dx;
     const float lo = 0, hi = (float)(page_count - 1) * W;
@@ -718,6 +728,17 @@ void launcher_swipe_release(void) {
     if (lv_tick_get() - swipe_start_ms < TAP_MS && !moved_far) {
         swipe_state = SWIPE_IDLE;
         return;
+    }
+    // FLICK: a fast short swipe advances one page in the flick direction —
+    // the iOS feel. Without it a half-page drag is the minimum gesture.
+    if (fabsf(flick_v) > 0.55f) {
+        int target = page_visible + (flick_v < 0 ? 1 : -1);  // right flick = next
+        if (target < 0)           target = 0;
+        if (target > page_count-1) target = page_count - 1;
+        if (target != page_visible) {
+            swipe_settle(-(float)target * (float)W, false);
+            return;
+        }
     }
     swipe_settle(roundf(pos) * -(float)W, false);   // page k lives at -k*W
 }
@@ -835,14 +856,12 @@ void launcher_init(lv_obj_t* parent) {
     lv_obj_set_style_pad_all(pages, 0, 0);
     lv_obj_set_scrollbar_mode(pages, LV_SCROLLBAR_MODE_OFF);
 
-    if (page_count > 1) {
-        lv_obj_set_flex_flow(pages, LV_FLEX_FLOW_ROW);
-        lv_obj_set_scroll_dir(pages, LV_DIR_HOR);
-        lv_obj_set_scroll_snap_x(pages, LV_SCROLL_SNAP_CENTER);
-        lv_obj_add_event_cb(pages, scroll_cb, LV_EVENT_SCROLL_END, NULL);
-    } else {
-        lv_obj_clear_flag(pages, LV_OBJ_FLAG_SCROLLABLE);
-    }
+    // The bypass swipe engine is the only scroll authority: LVGL indev
+    // scrolling stays OFF (it fought the engine mid-gesture and its scroll
+    // throw kept dragging after handback — the "hard to swipe" feel).
+    lv_obj_clear_flag(pages, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(pages, LV_FLEX_FLOW_ROW);
+    lv_obj_set_scroll_dir(pages, LV_DIR_HOR);
 
     for (int p = 0; p < page_count; p++) {
         lv_obj_t* page = lv_obj_create(pages);
