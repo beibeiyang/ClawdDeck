@@ -9,7 +9,11 @@
 
 // Render strip used when rotating in software. Sized to the largest LVGL
 // partial flush we ever do (LCD_WIDTH × BUF_LINES, set in main.cpp).
-#define ROT_BUF_LINES 40
+// Rotation buffer: sized for the LARGEST flush the display can receive.
+// main.cpp's full-screen render buffers (H5) deliver whole-screen flushes;
+// a 40-line buffer overflowed by 12x on every full-screen flush (heap
+// clobber = the flashing/rotated-garbage breakage).
+#define ROT_BUF_LINES LCD_HEIGHT
 static uint16_t* rot_buf = nullptr;
 
 static Arduino_DataBus* bus = nullptr;
@@ -31,7 +35,8 @@ void display_hal_begin(void) {
     gfx->fillScreen(0x0000);
     gfx->setBrightness(200);
 
-    // Allocate rotation strip (PSRAM). Sized to match main.cpp's BUF_LINES.
+    // Allocate rotation buffer (PSRAM). Sized to the largest flush the
+    // display delivers (see ROT_BUF_LINES above).
     rot_buf = (uint16_t*)heap_caps_malloc(LCD_WIDTH * ROT_BUF_LINES * 2, MALLOC_CAP_SPIRAM);
 }
 
@@ -110,15 +115,10 @@ void display_hal_paint_full(const uint16_t* pixels) {
         gfx->draw16bitRGBBitmap(0, 0, (uint16_t*)pixels, LCD_WIDTH, LCD_HEIGHT);
         return;
     }
-    // full-frame rotate into rot_buf (40-line strips: no big temp needed —
-    // rotate_strip is row-local, run the whole frame through it in strips)
-    for (int sy = 0; sy < LCD_HEIGHT; sy += ROT_BUF_LINES) {
-        int rows = LCD_HEIGHT - sy; if (rows > ROT_BUF_LINES) rows = ROT_BUF_LINES;
-        int32_t dx, dy, dw, dh;
-        rotate_strip(pixels + (size_t)sy * LCD_WIDTH, LCD_WIDTH, rows,
-                     0, sy, r, &dx, &dy, &dw, &dh);
-        gfx->draw16bitRGBBitmap(dx, dy, rot_buf, dw, dh);
-    }
+    // full-frame rotate into rot_buf (rot_buf = full-frame sized)
+    int32_t dx, dy, dw, dh;
+    rotate_strip(pixels, LCD_WIDTH, LCD_HEIGHT, 0, 0, r, &dx, &dy, &dw, &dh);
+    gfx->draw16bitRGBBitmap(dx, dy, rot_buf, dw, dh);
 }
 
 
