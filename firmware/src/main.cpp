@@ -219,6 +219,16 @@ static void check_serial_cmd() {
             else if (strcmp(cmd_buf, "home") == 0)  shell_go_home();
             else if (strncmp(cmd_buf, "open ", 5) == 0) shell_open_id(cmd_buf + 5);
             else if (strcmp(cmd_buf, "bench") == 0) launcher_bench_start();
+            else if (strcmp(cmd_buf, "flushclr") == 0) {
+                extern volatile uint32_t bench_flush_px, bench_flush_calls;
+                bench_flush_px = 0; bench_flush_calls = 0;
+            }
+            else if (strcmp(cmd_buf, "flushdbg") == 0) {
+                extern volatile uint32_t bench_flush_px, bench_flush_calls;
+                Serial.printf("[flush] px=%lu calls=%lu\n",
+                              (unsigned long)bench_flush_px,
+                              (unsigned long)bench_flush_calls);
+            }
     else if (strcmp(cmd_buf, "apps") == 0) {
                 for (int i = 0; i < shell_app_count(); i++)
                     Serial.printf("%d %s\n", i, shell_app_at(i)->id);
@@ -313,31 +323,30 @@ void setup() {
 
     lv_tick_set_cb(my_tick);
 
-    // Render strips: INTERNAL SRAM when it fits (38KB total). LVGL renders AND
-    // the flush byte-swaps read these buffers — PSRAM placement puts every
-    // pixel of both passes on the cache-thrashing OctalPSRAM bus (WROVER
-    // class). Factory-style UIs render from internal SRAM.
-    // BUF_LINES stays 40 — but the strips drop to 20 lines (2×480×20×2 = 38KB)
-    // so both fit in SRAM beside BLE/WiFi statics. Fewer lines per flush pass
-    // than 40, but each strip flush is DMA-able from SRAM and the render no
-    // longer fights the PSRAM bus (measured on hw: see .session-state.md).
+    // Full-screen render buffer: a whole-screen invalidation (app entry,
+    // rotation, splash load) renders and flushes in ONE pass (~150ms total)
+    // instead of walking 24 serialized 20-line strips (~1.2s visible top-down
+    // sweep — the "renders top to bottom over seconds" feel). Small invalids
+    // still render only the invalidated sub-rect of this buffer (LVGL clips
+    // the render to the dirty area), so steady-state cost is unchanged.
+    // PSRAM is required (460KB each; SRAM total is ~300KB) — H1 measured the
+    // strip-placement effect as neutral on this board, and for a one-shot
+    // full the flush dominates anyway. Kept double-buffered for parity.
 #ifdef BOARD_HAS_PSRAM
-    buf1 = (uint16_t*)heap_caps_malloc(W * 20 * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    buf2 = (uint16_t*)heap_caps_malloc(W * 20 * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!buf1 || !buf2) {
-        heap_caps_free(buf1);
-        heap_caps_free(buf2);
-        buf1 = (uint16_t*)heap_caps_malloc(W * BUF_LINES * 2, MALLOC_CAP_SPIRAM);
-        buf2 = (uint16_t*)heap_caps_malloc(W * BUF_LINES * 2, MALLOC_CAP_SPIRAM);
-        Serial.println("[perf] strips: SRAM alloc failed, PSRAM fallback");
-    } else {
-        Serial.println("[perf] strips: internal SRAM (20 lines)");
-        STRIP_LINES = 20;
+    buf1 = (uint16_t*)heap_caps_malloc((size_t)W * H * 2, MALLOC_CAP_SPIRAM);
+    buf2 = (uint16_t*)heap_caps_malloc((size_t)W * H * 2, MALLOC_CAP_SPIRAM);
+    if (buf1 && buf2) {
+        STRIP_LINES = H;
+        Serial.println("[perf] strips: PSRAM full-screen (one-shot fulls)");
     }
-#else
-    buf1 = (uint16_t*)heap_caps_malloc(W * BUF_LINES * 2, LV_BUF_CAPS);
-    buf2 = (uint16_t*)heap_caps_malloc(W * BUF_LINES * 2, LV_BUF_CAPS);
 #endif
+    if (!buf1 || !buf2) {   // no-PSRAM / alloc-failed boards keep strip buffers
+        heap_caps_free(buf1); heap_caps_free(buf2);
+        buf1 = (uint16_t*)heap_caps_malloc(W * BUF_LINES * 2, LV_BUF_CAPS);
+        buf2 = (uint16_t*)heap_caps_malloc(W * BUF_LINES * 2, LV_BUF_CAPS);
+        STRIP_LINES = BUF_LINES;
+        Serial.println("[perf] strips: strip buffers (fallback)");
+    }
 
     lv_display_t* disp = lv_display_create(W, H);
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
