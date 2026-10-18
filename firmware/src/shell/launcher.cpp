@@ -743,13 +743,13 @@ void launcher_swipe_release(void) {
     swipe_settle(swipe_choose_target(pos), false);
 }
 
-// iOS-feel release rule, shared by the release path and the tick's settle:
+// iOS release rule, shared by the release path and the tick's settle:
 // a fast short flick advances one page in the flick direction; anything
 // slower snaps to the nearest page by position.
 static float swipe_choose_target(float pos) {
     const int W = board_caps().width;
     if (fabsf(flick_v) > 0.55f) {
-        int target = page_visible + (flick_v < 0 ? 1 : -1);  // right flick = next
+        int target = page_visible + (flick_v < 0 ? 1 : -1);  // left flick = next
         if (target < 0)            target = 0;
         if (target > page_count-1) target = page_count - 1;
         if (target != page_visible) return -(float)target * (float)W;
