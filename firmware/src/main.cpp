@@ -19,6 +19,7 @@
 #include "hal/display_hal.h"
 void launcher_bench_start(void);
 void launcher_bench_tick(void);
+void launcher_swipe_tick(void);   // bypass swipe engine: touch tracking + settle
 #include "hal/touch_hal.h"
 #include "hal/input_hal.h"
 #include "hal/power_hal.h"
@@ -445,6 +446,7 @@ void loop() {
     idle_tick();
     lv_timer_handler();
     shell_tick();       // status bar + the foreground app's own tick
+    launcher_swipe_tick();   // bypass swipe engine (arm-on-intent / settle)
     launcher_bench_tick();
     ble_tick();
     power_hal_tick();
