@@ -93,7 +93,14 @@ static void compute_layout(const BoardCaps& c) {
                                    : &font_inter_14;
 }
 
+// Gesture arbiter: the engine arms on horizontal intent (dx > 12px); a swipe
+// release must NOT also fire the tile's CLICKED (LVGL suppresses clicks on
+// scroll only for indev-driven scrollable objects — not our case). The flag
+// is set when the engine arms and cleared when the touch fully resolves.
+static bool swipe_suppress_click = false;
+
 static void tile_clicked_cb(lv_event_t* e) {
+    if (swipe_suppress_click) return;   // swipe release, not a tap
     shell_open((int)(intptr_t)lv_event_get_user_data(e));
 }
 
@@ -489,6 +496,7 @@ static float engine_curve(float t) {
 
 void launcher_swipe_tick(void);
 static void swipe_settle(float target_off, bool immediate);
+static float swipe_choose_target(float pos);
 static struct timespec bench_t0;
 static void engine_render(void);
 extern "C" void lv_display_render_inhibit_set(uint8_t v);
@@ -691,6 +699,7 @@ void launcher_swipe_press(int x, int y) {
     prev_move_x = x;
     last_move_ms = lv_tick_get();
     flick_v = 0;
+    swipe_suppress_click = true;    // this drag must not click a tile
     swipe_start_ms = lv_tick_get();
     swipe_frac = 0;
     swipe_move_seen = false;
@@ -726,21 +735,26 @@ void launcher_swipe_release(void) {
     const bool moved_far = fabsf(pos - page_visible) > 0.32f;
     // Tap (brief + small move) = no page change (tile tap handling proceeds)
     if (lv_tick_get() - swipe_start_ms < TAP_MS && !moved_far) {
+        // brief + small = a tap, not a swipe: click stays allowed
+        swipe_suppress_click = false;
         swipe_state = SWIPE_IDLE;
         return;
     }
-    // FLICK: a fast short swipe advances one page in the flick direction —
-    // the iOS feel. Without it a half-page drag is the minimum gesture.
+    swipe_settle(swipe_choose_target(pos), false);
+}
+
+// iOS-feel release rule, shared by the release path and the tick's settle:
+// a fast short flick advances one page in the flick direction; anything
+// slower snaps to the nearest page by position.
+static float swipe_choose_target(float pos) {
+    const int W = board_caps().width;
     if (fabsf(flick_v) > 0.55f) {
         int target = page_visible + (flick_v < 0 ? 1 : -1);  // right flick = next
-        if (target < 0)           target = 0;
+        if (target < 0)            target = 0;
         if (target > page_count-1) target = page_count - 1;
-        if (target != page_visible) {
-            swipe_settle(-(float)target * (float)W, false);
-            return;
-        }
+        if (target != page_visible) return -(float)target * (float)W;
     }
-    swipe_settle(roundf(pos) * -(float)W, false);   // page k lives at -k*W
+    return roundf(pos) * -(float)W;                 // page k lives at -k*W
 }
 
 static float settle_from   = 0;   // offset when settle started
@@ -765,9 +779,13 @@ void launcher_swipe_tick(void) {
                 if (p) { lv_display_render_inhibit_set(1); launcher_swipe_move(x, y); engine_render(); return; }
             // Latch reads UP: settle from wherever we got to (move_seen
             // guards a stale latch: press with no fresh sample anywhere).
-            if (!swipe_move_seen) { swipe_state = SWIPE_IDLE; break; }
+            if (!swipe_move_seen) {
+                swipe_state = SWIPE_IDLE;
+                swipe_suppress_click = false;
+                break;
+            }
             const float pos = -swipe_offset / (float)W;
-            swipe_settle(roundf(pos) * -(float)W, false);
+            swipe_settle(swipe_choose_target(pos), false);
         }
         break;
     }
@@ -786,6 +804,7 @@ void launcher_swipe_tick(void) {
             lv_obj_scroll_to_x(pages, page_visible * (float)W, LV_ANIM_OFF);
             painted_offset = swipe_offset;
             lv_display_render_inhibit_set(0);
+            swipe_suppress_click = false;   // gesture fully resolved
             refresh_dots();
         }
         break;
