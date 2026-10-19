@@ -29,13 +29,14 @@ status row.
 
 |  |  |  |  |
 | :---: | :---: | :---: | :---: |
-| ![Clock](screenshots/readme/clock.png) | ![Sessions](screenshots/readme/sessions.png) | ![Level](screenshots/readme/level-hw.png) | ![Voice](screenshots/readme/voice.png) |
-| **Clock** — glass watchface card, live seconds tier, 24h via the host | **Sessions** — recent Claude sessions, tap to resume on the Mac | **Level** — real IMU bubble dial (89.2° of desk tilt, live) | **Voice** — push-to-talk hero, glass mic button |
+| ![Clock](screenshots/readme/clock.png) | ![Sessions](screenshots/readme/sessions.png) | ![Level upright](screenshots/readme/level.png) | ![Voice](screenshots/readme/voice.png) |
+| **Clock** — typography-first, host-synced time with seconds | **Sessions** — recent Claude sessions, tap to resume on the Mac | **Level** — gravity-following ball; centered flat and at 6 o’clock upright | **Voice** — hold-to-dictate with a clear ready/listening state |
 | ![Settings](screenshots/readme/settings.png) | ![SpecAnalyzer](screenshots/readme/micscope.png) | ![Host](screenshots/readme/apps-registry.png) | ![Clawdmeter](screenshots/splash.gif) |
 | **Settings** — brightness, BLE pairing, storage/memory/battery telemetry, close background apps, restart / power-off (two-tap guarded) | **SpecAnalyzer** — live spectrum | **Host** — placeholder in the glass-card language | **Clawdmeter** — the original usage meter + splash animations |
 
-On hardware — settings with real BLE name/MAC + the pairing danger card on
-the panel, next to the sim reference:
+On hardware — settings and the pairing danger card, next to the simulator
+reference. The displayed address is a fabricated privacy placeholder, not the
+board's Bluetooth address; use the address reported by a Bluetooth scan to pair:
 
 |  Settings (sim)  |  Settings (hardware)  |
 | :---: | :---: |
@@ -263,8 +264,9 @@ After flashing, the device advertises as "ClawdDeck". Pair it once:
 bluetoothctl scan le
 
 # When "ClawdDeck" appears, pair and trust it
-bluetoothctl pair 02:55:AF:D3:22:71    # use your device's MAC
-bluetoothctl trust 02:55:AF:D3:22:71
+BOARD_MAC="replace-with-address-from-scan"
+bluetoothctl pair "$BOARD_MAC"
+bluetoothctl trust "$BOARD_MAC"
 ```
 
 To re-pair later, hold the power button for 3 seconds then release — the device clears its saved bond and re-advertises.
