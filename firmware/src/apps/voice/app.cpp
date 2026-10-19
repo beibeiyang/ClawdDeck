@@ -11,18 +11,12 @@
 
 LV_FONT_DECLARE(font_inter_20);
 LV_FONT_DECLARE(font_inter_32);
-LV_FONT_DECLARE(font_inter_28);
 LV_FONT_DECLARE(font_inter_16);
 LV_FONT_DECLARE(font_inter_14);
 LV_FONT_DECLARE(font_phos_28);
-LV_FONT_DECLARE(font_phos_40);
 LV_FONT_DECLARE(font_phos_64);
 
-// Push-to-talk into Claude Code via BLE HID Space. Whisper transcription and
-// WiFi offload to the host bridge are not wired yet — the button drives the
-// whole screen: a glass mic tile (the launcher's glass_tile() scaled up, with
-// the soon-card's light dome giving it light to bend) that visibly takes the
-// press while Space is held on the Mac.
+// Voice input over the existing HID and dictation transports.
 
 #define VOICE_FOOT_H 34
 #define HID_SPACE 0x2C
@@ -233,44 +227,10 @@ static void voice_create(lv_obj_t* root) {
     const VoiceLayout layout = voice_layout(W, H, STATUSBAR_H, VOICE_FOOT_H);
     const int btn = layout.mic.w;
 
-    // ---- Quiet light field (the glass needs light to bend) -----------------
-    // App backdrop: the launcher duotone's own slice (warm crest → navy
-    // floor, falloff ending mid-panel so the 5-bit gradient can't band).
-    lv_obj_set_style_bg_color(root, THEME_BG_TOP, 0);
-    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_grad_color(root, THEME_BG_BOT, 0);
-    lv_obj_set_style_bg_grad_dir(root, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_main_stop(root, 0, 0);
-    lv_obj_set_style_bg_grad_stop(root, 230, 0);
-
-    // Precision Black field: solid RGB565-safe background, with no broad
-    // luma ramp behind the controls or copy.
+    // Precision Black: a uniform field avoids RGB565 gradient banding.
     lv_obj_set_style_bg_color(root, lv_color_hex(0x050607), 0);
     lv_obj_set_style_bg_grad_dir(root, LV_GRAD_DIR_NONE, 0);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
-
-    // The launcher's luminous light dome (soon.cpp recipe verbatim): a giant
-    // cream ellipse, top edge off-panel, lower rim arcing across the field —
-    // rendered OVER the duotone and THROUGH the translucent glass.
-    lv_obj_t* dome = lv_obj_create(root);
-    lv_obj_set_size(dome, W + W * 2 / 3, W);
-    lv_obj_set_pos(dome, -W / 4, -W * 5 / 8);
-    lv_obj_set_style_radius(dome, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(dome, SHEEN_TINT, 0);
-    lv_obj_set_style_bg_opa(dome, 34, 0);
-    lv_obj_set_style_bg_grad_color(dome, SHEEN_TINT, 0);
-    lv_obj_set_style_bg_grad_opa(dome, 0, 0);
-    lv_obj_set_style_bg_grad_dir(dome, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_main_stop(dome, 0, 0);
-    lv_obj_set_style_bg_grad_stop(dome, 255, 0);
-    lv_obj_set_style_border_color(dome, RIM_CREAM, 0);
-    lv_obj_set_style_border_width(dome, 3, 0);
-    lv_obj_set_style_border_opa(dome, 55, 0);
-    lv_obj_set_style_border_side(dome, LV_BORDER_SIDE_BOTTOM, 0);
-    lv_obj_set_style_outline_width(dome, 0, 0);
-    lv_obj_clear_flag(dome, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(dome, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(dome, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
     lv_obj_t* title = lv_label_create(root);
     lv_label_set_text(title, "Voice");
@@ -278,36 +238,10 @@ static void voice_create(lv_obj_t* root) {
     lv_obj_set_style_text_color(title, THEME_TEXT, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, STATUSBAR_H + (compact ? 8 : 14));
 
-    // ---- The glass mic button ----------------------------------------------
+    // ---- Microphone control -------------------------------------------------
     mic_btn = lv_btn_create(root);
     lv_obj_set_size(mic_btn, btn, btn);
     lv_obj_align(mic_btn, LV_ALIGN_CENTER, 0, -6);
-
-    const lv_color_t hue  = lv_color_hex(0x5f8f46);   // voice tile hue
-    // Backdrop light behind the button — the duotone at mid-screen (the pool
-    // stop must pull that light through, exactly like the launcher's
-    // wall_base_at()).
-    const lv_color_t wall = lv_color_mix(THEME_BG_FLOOR, THEME_BG_TOP, 60);
-
-    // LIFT fill, one VER gradient carrying the whole material (launcher
-    // glass_tile numbers): top stop = the sheen (wall lifted hard toward
-    // cream, hue as a cast), bottom stop the pool (wall lifted toward hue,
-    // near-white kissed in). Brightness beats the backdrop by a wide margin
-    // or the glass reads as a hole.
-    // Critic r1: card read flat/murky. Lift hard: cream sheen dominates the
-    // top (green demotes to a cast), pool lifts toward white and keeps the
-    // green story — glass beats the backdrop.
-    lv_obj_set_style_bg_color(mic_btn,
-        lv_color_mix(lv_color_mix(wall, RIM_CREAM, 85), hue, 170), 0);
-    lv_obj_set_style_bg_opa(mic_btn, 170, 0);
-    // r2b nit: the base pool = a flat tail — deepen it into a real pooled
-    // glow (more saturation at the same stop, luma near-equal).
-    lv_obj_set_style_bg_grad_color(mic_btn,
-        lv_color_mix(lv_color_mix(wall, lv_color_hex(0xffffff), 14), hue, 110), 0);
-    lv_obj_set_style_bg_grad_opa(mic_btn, 200, 0);
-    lv_obj_set_style_bg_grad_dir(mic_btn, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_bg_main_stop(mic_btn, 0, 0);
-    lv_obj_set_style_bg_grad_stop(mic_btn, 240, 0);
 
     // The button uses solid graphite in its resting state. State changes add
     // the single warm listening accent without moving any content.
@@ -320,61 +254,22 @@ static void voice_create(lv_obj_t* root) {
     lv_obj_set_style_border_width(mic_btn, 1, 0);
     lv_obj_set_style_shadow_width(mic_btn, 0, 0);
 
-    // Soft puddle shadow + cream rim + dark outer contour (launcher-tuned).
-    lv_obj_set_style_shadow_color(mic_btn, GLASS_SHADOW, 0);
-    lv_obj_set_style_shadow_width(mic_btn, 14, 0);
-    lv_obj_set_style_shadow_spread(mic_btn, 0, 0);
-    lv_obj_set_style_shadow_ofs_y(mic_btn, 5, 0);
-    lv_obj_set_style_shadow_opa(mic_btn, 25, 0);
+    // A quiet graphite rim defines the touch target without a glass effect.
     lv_obj_set_style_radius(mic_btn, btn / 2, 0);
-    lv_obj_set_style_border_color(mic_btn, RIM_CREAM, 0);
-    lv_obj_set_style_border_width(mic_btn, 3, 0);
-    lv_obj_set_style_border_opa(mic_btn, 150, 0);
-    lv_obj_set_style_outline_color(mic_btn, GLASS_SHADOW, 0);
-    lv_obj_set_style_outline_width(mic_btn, 1, 0);
-    lv_obj_set_style_outline_pad(mic_btn, 0, 0);
-    lv_obj_set_style_outline_opa(mic_btn, 90, 0);
     lv_obj_clear_flag(mic_btn, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scrollbar_mode(mic_btn, LV_SCROLLBAR_MODE_OFF);
 
-    // Directional rim: a top-arc glint INSIDE the rim — a concentric circle
-    // child drawing only its top border edge, so light-from-above follows
-    // the curvature. (The launcher tile's rounded-rect glint child does not
-    // survive a circular button: its straight chords leak past the disc —
-    // build-1 defect, replaced by the arc.)
-    lv_obj_t* glint = lv_obj_create(mic_btn);
-    lv_obj_set_size(glint, btn - 12, btn - 12);
-    lv_obj_align(glint, LV_ALIGN_TOP_MID, 0, 4);
-    lv_obj_set_style_radius(glint, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_opa(glint, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_color(glint, RIM_CREAM, 0);
-    lv_obj_set_style_border_width(glint, 3, 0);
-    lv_obj_set_style_border_side(glint, LV_BORDER_SIDE_TOP, 0);
-    lv_obj_set_style_border_opa(glint, 120, 0);
-    lv_obj_set_style_outline_width(glint, 0, 0);
-    lv_obj_set_style_pad_all(glint, 0, 0);
-    lv_obj_clear_flag(glint, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(glint, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(glint, LV_OBJ_FLAG_IGNORE_LAYOUT);
-
-    // Press feedback: the glass thickens — fill deepens, rim brightens, the
-    // puddle pools darker. Style states only; no new widgets to clean up.
-    lv_obj_set_style_bg_opa(mic_btn, 190, LV_STATE_PRESSED);
-    lv_obj_set_style_bg_grad_opa(mic_btn, 210, LV_STATE_PRESSED);
-    lv_obj_set_style_border_opa(mic_btn, 190, LV_STATE_PRESSED);
-    lv_obj_set_style_shadow_opa(mic_btn, 60, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(mic_btn, lv_color_hex(0x292d31), LV_STATE_PRESSED);
 
     lv_obj_add_event_cb(mic_btn, mic_event, LV_EVENT_PRESSED, nullptr);
     lv_obj_add_event_cb(mic_btn, mic_event, LV_EVENT_RELEASED, nullptr);
     lv_obj_add_event_cb(mic_btn, mic_event, LV_EVENT_PRESS_LOST, nullptr);
 
-    // Glyph: dark ink on the light glass, optically centered (optical center
-    // sits ~2px above geometric on the 40px Phosphor face).
+    // Warm white glyph, optically centered.
     mic_glyph = lv_label_create(mic_btn);
     lv_label_set_text(mic_glyph, PH_MICROPHONE);
     lv_obj_set_style_text_font(mic_glyph,
                                compact ? &font_phos_28 : &font_phos_64, 0);
-    lv_obj_set_style_text_color(mic_glyph, THEME_INK, 0);
     lv_obj_set_style_text_color(mic_glyph, lv_color_hex(0xfaf9f5), 0);
     lv_obj_set_style_text_opa(mic_glyph, 235, 0);
     lv_obj_set_style_text_letter_space(mic_glyph, 0, 0);
@@ -432,11 +327,6 @@ static void voice_create(lv_obj_t* root) {
     lv_obj_set_pos(transcript, layout.transcript.x, layout.transcript.y);
     lv_label_set_long_mode(transcript, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_line_space(transcript, compact ? 1 : 2, 0);
-
-    // Keep the old decorative dome out of the rendered screen. It remains in
-    // the construction order above only so this UI can reuse its stable child
-    // ordering while the rest of Voice is replaced incrementally.
-    lv_obj_add_flag(dome, LV_OBJ_FLAG_HIDDEN);
 
     set_state(VOICE_IDLE);
 }
