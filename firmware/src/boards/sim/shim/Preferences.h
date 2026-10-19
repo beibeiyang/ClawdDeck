@@ -13,4 +13,6 @@ public:
     void end(void) {}
     uint8_t getUChar(const char* key, uint8_t def = 0);
     size_t  putUChar(const char* key, uint8_t value);
+    int32_t getInt(const char* key, int32_t def = 0);
+    size_t  putInt(const char* key, int32_t value);
 };

@@ -24,10 +24,15 @@ bool imu_hal_read_accel_live(float* ax, float* ay, float* az);
 // Convenience: pitch/roll in degrees from gravity (board frame).
 bool imu_hal_read_tilt(float* pitch_deg, float* roll_deg);
 
-// Gravity Ball — bias calibration + deadzone (ported from Waveshare 04_Immersive_block).
+// Level gravity — persistent mount-bias calibration plus a noise deadzone.
+void imu_hal_gravity_cal_begin(void);
+// Compatibility alias: cancels an in-progress calibration without clearing the
+// last known-good persisted bias.
 void imu_hal_gravity_cal_reset(void);
-// Runs one calibration pass; returns 0..100 progress, true when finished OK.
+// Adds one fresh sample. Returns true only after a complete calibration was
+// persisted. pct_out is 0..100, or -1 when a live sensor read fails.
 bool imu_hal_gravity_cal_step(int* pct_out);
+void imu_hal_gravity_cal_cancel(void);
 bool imu_hal_gravity_ready(void);
 // Calibrated horizontal accel in g; Z ignored. Used for rolling-ball motion.
 bool imu_hal_read_gravity(float* gx, float* gy);

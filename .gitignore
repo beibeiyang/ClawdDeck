@@ -11,6 +11,9 @@ firmware/.vscode/
 # Claude Code
 .claude/
 
+# Local Superpowers design and execution state
+/.superpowers/
+
 # Node tooling deps (npm install --no-save)
 tools/node_modules/
 tools/package-lock.json

@@ -6,6 +6,7 @@
 #include "../hal/board_caps.h"
 #include "draw/snapshot/lv_snapshot.h"
 #include <stdio.h>
+#include <time.h>
 
 
 LV_FONT_DECLARE(font_inter_28);
@@ -505,7 +506,6 @@ extern "C" void lv_display_render_inhibit_set(uint8_t v);
 // ---- Swipe bench (serial 'bench') ------------------------------------------
 // Drives a scripted horizontal swipe and prints the wall-clock per frame, so
 // render+flush cost measures directly — sim AND hardware.
-#include <time.h>
 #include <math.h>
 #include <string.h>
 static int bench_frame = 0;
