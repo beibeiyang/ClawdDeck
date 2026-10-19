@@ -652,37 +652,35 @@ _IMA_STEP_TABLE = [
 _IMA_ADJ = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8]
 
 
-def ima_adpcm_decode(blocks: bytes, rate: int) -> "np.ndarray | None":
-    """Decode a reassembled IMA-ADPCM chunk stream to int16 mono PCM.
+def ima_adpcm_decode(blocks: "bytes | list[bytes]", rate: int) -> "np.ndarray | None":
+    """Decode self-contained IMA-ADPCM blocks to int16 mono PCM.
 
-    Board format: back-to-back blocks of 4 + 88 bytes (= 92; the envelope's
-    len byte told the reassembler how many payload bytes each chunk carried).
-    Block = [pred:i16le][step_idx:u8][rsvd:u8][88 packed nibbles] — low
-    nibble first, 176 samples per block @ 16 kHz (11 ms).
+    New callers pass one item per BLE notification, preserving each block's
+    real length so firmware can size packets to the negotiated MTU. A flat
+    byte string remains supported for old recordings/tests and is split using
+    the original 92-byte block stride.
     """
     if np is None:
         return None
-    BLOCK = 4 + 88
-    out = np.empty((len(blocks) // BLOCK + 1) * 176, dtype=np.int16)
+    del rate  # The codec is rate-independent; rate matters at transcription.
+    if isinstance(blocks, (bytes, bytearray)):
+        legacy = bytes(blocks)
+        block_list = [legacy[p:p + 92] for p in range(0, len(legacy), 92)]
+    else:
+        block_list = blocks
+    sample_capacity = sum(max(0, len(block) - 4) * 2 for block in block_list)
+    if sample_capacity == 0:
+        return None
+    out = np.empty(sample_capacity, dtype=np.int16)
     n_out = 0
-    pos = 0
-    while pos + 4 <= len(blocks):
-        # A trailing partial block (last chunk may be short) still decodes:
-        # packed = whatever follows the header, in nibbles.
-        header_end = pos + 4
-        # Detect the next header: fixed stride only holds if the stream is
-        # strictly 92-byte blocks — the envelope guaranteed each chunk was a
-        # whole block (voice app sends one block per chunk), so stride holds.
-        raw = blocks[pos] | (blocks[pos + 1] << 8)      # uint16 LE
+    for block in block_list:
+        if len(block) < 4:
+            continue
+        raw = block[0] | (block[1] << 8)                # uint16 LE
         pred = raw - 65536 if raw >= 0x8000 else raw    # int16 wrap (numpy 2 strictness)
-        step_idx = min(blocks[pos + 2], 88)
-        pos = header_end
-        block_payload_end = min(pos + 88, len(blocks))
-        while pos < block_payload_end:
-            b = blocks[pos]
+        step_idx = min(block[2], 88)
+        for b in block[4:]:
             for nib in (b & 0x0F, (b >> 4) & 0x0F):
-                if n_out >= len(out):
-                    return out[:n_out]
                 step = _IMA_STEP_TABLE[step_idx]
                 d = step >> 3
                 if nib & 4:
@@ -701,7 +699,6 @@ def ima_adpcm_decode(blocks: bytes, rate: int) -> "np.ndarray | None":
                 out[n_out] = pred
                 n_out += 1
                 step_idx = max(0, min(88, step_idx + _IMA_ADJ[nib]))
-            pos += 1
     return out[:n_out] if n_out else None
 
 
@@ -734,7 +731,11 @@ class Session:
         self._bridge_queue: asyncio.Queue[dict] = asyncio.Queue()
         self._voice_queue: "asyncio.Queue[bytes]" = asyncio.Queue()
         self._voice_buf = bytearray()
+        self._voice_blocks: list[bytes] = []
         self._voice_last_seq: int | None = None
+        self._voice_rate = SAMPLE_RATE_VOICE
+        self._voice_seq_gaps = 0
+        self._voice_overrun = False
 
     def _on_refresh(self, _char, _data: bytearray) -> None:
         log("Refresh requested by device")
@@ -820,9 +821,8 @@ class Session:
 
     async def drain_voice(self) -> None:
         # Chunk envelope: [seq:u8][flags:u8][len:u8][payload...]; flags bit0 =
-        # EOU. Reassemble in order (drops tolerated: a missing seq = gap →
-        # resync by continuing; the ADPCM blocks are self-contained with their
-        # own predictor header, so a gap = an audible blip, not a crash).
+        # EOU. Preserve notification boundaries: block size follows negotiated
+        # MTU and each ADPCM block carries its own predictor header.
         while not self._voice_queue.empty():
             chunk = await self._voice_queue.get()
             if len(chunk) < 3:   # EOU is a bare 3-byte header (empty payload)
@@ -832,30 +832,59 @@ class Session:
             # is redundant (and was left 0 by older firmware), so ignore it.
             payload = bytes(chunk[3:])
             if self._voice_last_seq is not None and seq != (self._voice_last_seq + 1) & 0xFF:
-                log(f"Voice: seq gap {self._voice_last_seq} -> {seq} (dropped chunks tolerated)")
+                self._voice_seq_gaps += 1
+                log(f"Voice: seq gap {self._voice_last_seq} -> {seq}")
             self._voice_last_seq = seq
-            self._voice_buf.extend(payload)
+            if payload:
+                packet_rate = 8000 if flags & 0x02 else SAMPLE_RATE_VOICE
+                if self._voice_blocks and packet_rate != self._voice_rate:
+                    self._voice_overrun = True
+                    log("Voice: sample rate changed inside utterance")
+                self._voice_rate = packet_rate
+                self._voice_blocks.append(payload)
+                self._voice_buf.extend(payload)  # compatibility/debug byte count
+            if flags & 0x04:
+                self._voice_overrun = True
             if flags & 0x01:   # end-of-utterance
                 await self._transcribe_voice()
 
     async def _transcribe_voice(self) -> None:
         audio_bytes = bytes(self._voice_buf)
+        blocks = self._voice_blocks[:]
+        rate = self._voice_rate
+        seq_gaps = self._voice_seq_gaps
+        overrun = self._voice_overrun
         self._voice_buf.clear()
+        self._voice_blocks.clear()
         self._voice_last_seq = None
+        self._voice_rate = SAMPLE_RATE_VOICE
+        self._voice_seq_gaps = 0
+        self._voice_overrun = False
         if not audio_bytes:
             log("Voice: end-of-utterance with no audio")
             await self.write_bridge({"t": "err", "m": "No audio received"})
             return
-        pcm = ima_adpcm_decode(audio_bytes, SAMPLE_RATE_VOICE)  # int16 mono 16k
+        log(f"Voice: transport blocks={len(blocks)} bytes={len(audio_bytes)} "
+            f"rate={rate} gaps={seq_gaps} overrun={int(overrun)}")
+        if overrun or seq_gaps:
+            await self.write_bridge(
+                {"t": "err", "m": "Audio link dropped data - please retry"})
+            return
+        pcm = ima_adpcm_decode(blocks, rate)
         if pcm is None or len(pcm) == 0:
             await self.write_bridge({"t": "err", "m": "Voice decode failed"})
             return
-        dur = len(pcm) / SAMPLE_RATE_VOICE
+        dur = len(pcm) / rate
         if dur < 0.3:   # a tap, not speech — whisper would only hallucinate
             log(f"Voice: {dur:.2f}s utterance — too short, skipped")
             await self.write_bridge({"t": "err", "m": "Too short - hold to talk"})
             return
-        log(f"Voice: {len(pcm)} samples ({dur:.1f}s) — transcribing")
+        if rate == 8000:
+            # faster-whisper treats numpy waveforms as 16 kHz. Repeat samples
+            # to preserve time; this cannot restore >4 kHz detail, which is why
+            # 8 kHz is reserved for small-MTU compatibility links.
+            pcm = np.repeat(pcm, 2)
+        log(f"Voice: {dur:.1f}s @ {rate} Hz — transcribing")
         text = whisper_transcribe(pcm)
         if text is None:
             # whisper_transcribe logs its own failures; None with no log line

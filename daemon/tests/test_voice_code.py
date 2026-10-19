@@ -1,11 +1,10 @@
 """Voice dictation codec tests: the daemon's IMA-ADPCM decoder against the
 board encoder convention (mirrored in Python here) + chunk-envelope framing.
 
-The board (firmware/src/boards/waveshare_amoled_216/audio_in.cpp) emits
-back-to-back blocks of 4 + 88 bytes: [pred:i16le][step_idx:u8][rsvd:u8]
-[88 packed nibbles; low nibble = first sample], 176 samples per block @
-16 kHz. The daemon reassembles chunk envelopes [seq:u8][flags:u8][len:u8]
-[payload...] before decoding.
+Blocks are [pred:i16le][step_idx:u8][rsvd:u8][packed nibbles; low nibble
+first]. Firmware sizes them to the negotiated BLE MTU; the legacy size was
+92 bytes / 176 samples. The daemon preserves chunk boundaries so both forms
+decode correctly.
 """
 import numpy as np
 import pytest
@@ -91,7 +90,6 @@ def test_roundtrip_speech_like_snr():
     for off in range(0, len(sig), SAMPLES_PER_BLOCK):
         blk, pred, idx = encode_block(sig[off:off + SAMPLES_PER_BLOCK], pred, idx)
         stream += blk
-    assert len(stream) % 92 == 0
     rec = ima_adpcm_decode(stream, rate)
     assert rec is not None and len(rec) == len(sig)
     err = sig.astype(float) - rec.astype(float)
@@ -125,6 +123,23 @@ def test_trailing_partial_block_decodes():
     partial = stream[:-40]
     rec = ima_adpcm_decode(partial, rate)
     assert rec is not None and len(rec) > 0
+
+
+def test_variable_mtu_sized_blocks_decode_exact_sample_count():
+    """The normal MTU-185 path carries 350 samples, while a smaller link can
+    choose a different block size without changing the daemon decoder."""
+    sizes = [350, 350, 128]
+    blocks = []
+    pred, idx = 0, 0
+    phase = 0
+    for size in sizes:
+        t = np.arange(phase, phase + size) / 16000
+        pcm = (np.sin(2 * np.pi * 330 * t) * 7000).astype(np.int16)
+        block, pred, idx = encode_block(pcm, pred, idx)
+        blocks.append(block)
+        phase += size
+    rec = ima_adpcm_decode(blocks, 16000)
+    assert rec is not None and len(rec) == sum(sizes)
 
 def test_header_only_eou_chunk_triggers_transcription():
     """The board's EOU marker is a bare 3-byte header (empty payload) —
@@ -164,3 +179,63 @@ def test_zero_len_byte_still_carries_payload():
     sess._on_voice(None, bytearray([1, 0x01, 0]))
     asyncio.run(sess.drain_voice())
     assert calls == [bytes(block)]
+
+
+def test_8khz_transport_is_upsampled_for_whisper(monkeypatch):
+    """8 kHz is a compatibility fallback; duration stays correct and Whisper
+    still receives the 16 kHz numpy waveform it expects."""
+    import asyncio
+    import claude_usage_daemon as daemon
+
+    sess = daemon.Session(client=None)
+    typed = []
+    replies = []
+
+    monkeypatch.setattr(daemon, "whisper_transcribe",
+                        lambda pcm: typed.append(len(pcm)) or "fallback works")
+
+    async def fake_write(payload):
+        replies.append(payload)
+        return True
+
+    sess.write_bridge = fake_write
+    pred, idx = 0, 0
+    for seq in range(16):  # 2816 samples = 0.352 s at 8 kHz
+        block, pred, idx = encode_block([1000] * 176, pred, idx)
+        sess._on_voice(None, bytearray([seq, 0x02, len(block)]) + block)
+    sess._on_voice(None, bytearray([16, 0x03, 0]))
+    asyncio.run(sess.drain_voice())
+
+    assert typed == [16 * 176 * 2]
+    assert {"t": "vt", "tx": "fallback works"} in replies
+
+
+@pytest.mark.parametrize("bad_flags", [0x05, 0x01])
+def test_damaged_transport_is_rejected_not_transcribed(monkeypatch, bad_flags):
+    """Queue overruns and sequence gaps must surface as retryable errors,
+    never plausible-but-corrupted transcripts."""
+    import asyncio
+    import claude_usage_daemon as daemon
+
+    sess = daemon.Session(client=None)
+    called = []
+    replies = []
+    monkeypatch.setattr(daemon, "whisper_transcribe",
+                        lambda _pcm: called.append(True) or "wrong")
+
+    async def fake_write(payload):
+        replies.append(payload)
+        return True
+
+    sess.write_bridge = fake_write
+    block, _, _ = encode_block([1000] * 350)
+    sess._on_voice(None, bytearray([0, 0, len(block)]) + block)
+    if bad_flags == 0x01:  # create a sequence gap rather than an overrun flag
+        sess._on_voice(None, bytearray([2, bad_flags, 0]))
+    else:
+        sess._on_voice(None, bytearray([1, bad_flags, 0]))
+    asyncio.run(sess.drain_voice())
+
+    assert not called
+    assert replies[-1]["t"] == "err"
+    assert "dropped" in replies[-1]["m"]

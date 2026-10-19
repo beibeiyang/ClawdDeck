@@ -5,12 +5,39 @@
 static bool    active = false;
 static uint8_t peak   = 0;
 static float   phase  = 0.0f;
+static uint16_t voice_samples = 176;
+static uint32_t voice_rate = 16000;
+static uint32_t voice_next_due = 0;
+static uint32_t voice_captured = 0;
 
 bool audio_in_hal_start(void) {
     active = true;
     peak   = 0;
     phase  = 0.0f;
     return true;
+}
+
+bool audio_in_hal_start_voice(size_t max_payload) {
+    if (active || max_payload < 68) return false;
+    if (max_payload > 179) max_payload = 179;
+    voice_samples = (uint16_t)((max_payload - 4) * 2);
+    voice_rate = voice_samples >= 300 ? 16000 : 8000;
+    voice_next_due = 0;
+    voice_captured = 0;
+    active = true;
+    peak = 0;
+    phase = 0.0f;
+    return true;
+}
+
+uint32_t audio_in_hal_voice_sample_rate(void) { return voice_rate; }
+
+void audio_in_hal_voice_stats(audio_in_voice_stats_t* out) {
+    if (!out) return;
+    out->captured_blocks = voice_captured;
+    out->dropped_blocks = 0;
+    out->queue_high_water = 1;
+    out->samples_per_block = voice_samples;
 }
 
 void audio_in_hal_stop(void) {
@@ -45,12 +72,12 @@ size_t audio_in_hal_read_stereo(int16_t* out, size_t frames) {
 // sim's payload exercises the transport + daemon plumbing, not the codec).
 size_t audio_in_hal_read_adpcm(uint8_t* out, size_t cap) {
     if (!active || !out || cap < 4) return 0;
-    static uint32_t next_due = 0;   // one block per 11 ms of wall time
     const uint32_t now = lv_tick_get();
-    if ((int32_t)(now - next_due) < 0) return 0;
-    next_due = ((int32_t)(now - next_due) > 100) ? now + 11 : next_due + 11;
-    // 120-sample block @ the sim phase: 60 bytes packed + 4-byte header
-    const size_t n = 120;
+    if ((int32_t)(now - voice_next_due) < 0) return 0;
+    const uint32_t block_ms = ((uint32_t)voice_samples * 1000 + voice_rate - 1) / voice_rate;
+    voice_next_due = ((int32_t)(now - voice_next_due) > 100)
+                       ? now + block_ms : voice_next_due + block_ms;
+    const size_t n = voice_samples;
     if (cap < 4 + n / 2) return 0;
     out[0] = 0; out[1] = 0; out[2] = 40; out[3] = 0;   // pred=0, step=40
     float t0 = phase;
@@ -64,6 +91,7 @@ size_t audio_in_hal_read_adpcm(uint8_t* out, size_t cap) {
         else       out[4 + i / 2]  = (uint8_t)nib;
     }
     phase = t0 + (float)n * 0.02f;
+    voice_captured++;
     audio_in_hal_tick();   // the meter follows the stream (no separate reader)
     return 4 + n / 2;
 }

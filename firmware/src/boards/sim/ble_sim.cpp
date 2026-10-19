@@ -150,6 +150,8 @@ const char* ble_bridge_take_rx(void) {
 // Voice dictation (sim): count chunks; on EOU, deliver a canned 'vt' reply so
 // the app's transcript path is exercisable end-to-end without a daemon.
 static int   sim_voice_chunks = 0;
+size_t ble_voice_payload_capacity(void) { return connected ? 179 : 0; }
+uint16_t ble_voice_mtu(void) { return connected ? 185 : 0; }
 bool ble_voice_send_chunk(uint8_t seq, uint8_t flags, const uint8_t* data, uint8_t len) {
     (void)data; (void)len;
     sim_voice_chunks++;

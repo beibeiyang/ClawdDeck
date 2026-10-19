@@ -155,13 +155,17 @@ display-only: the transcript still appears on the panel.
 
 - New GATT characteristic on the data service: **VOICE (0x…0007)**, notify.
 - Chunk envelope: `[seq:u8][flags:u8][len:u8][payload…]`, payload = one
-  IMA-ADPCM block (4-byte header `[pred:i16le][step_idx:u8][rsvd:u8]` +
-  88 packed nibble bytes = 176 samples ≈ 11 ms @ 16 kHz), sized so one
-  block + envelope fits the minimum-negotiated-MTU notify (185).
-- `flags` bit0 = end-of-utterance. Sequence gaps are tolerated (blocks are
-  self-contained; a gap = an audio blip, the daemon logs it).
+  self-contained IMA-ADPCM block (4-byte header
+  `[pred:i16le][step_idx:u8][rsvd:u8]` + packed nibbles). Block size follows
+  the subscribed connection's negotiated MTU. At MTU 185, 350 samples
+  (≈21.9 ms @ 16 kHz) fit in each notify, cutting the required rate from
+  about 91 to 46 notifications/s.
+- `flags` bit0 = end-of-utterance, bit1 = 8 kHz compatibility capture, and
+  bit2 on EOU = capture overrun. 16 kHz is preferred; unusually small MTUs
+  automatically use 8 kHz. Sequence gaps and overruns are rejected with a
+  retry prompt instead of transcribing silently damaged audio.
 - Codec test suite: `daemon/tests/test_voice_code.py` (round-trip SNR,
-  envelope framing, partial-block decode).
+  variable-MTU framing, 8 kHz fallback, damaged-stream rejection).
 
 ## Screens
 
