@@ -48,8 +48,10 @@ static uint32_t      processing_at = 0;
 static uint8_t  dict_seq        = 0;
 static bool     mic_capture_ok  = false;
 static uint32_t transcribe_from = 0;
-static uint8_t  dict_block[96];      // block awaiting a notify slot
+static uint8_t  dict_block[179];     // negotiated ADPCM block awaiting a notify slot
 static size_t   dict_block_len  = 0;
+static uint8_t  dict_audio_flags = 0; // bit1 = 8 kHz; bit2 reserved for overrun on EOU
+static uint32_t dict_sent_blocks = 0;
 
 // Send every captured block that's ready. A block whose notify fails (link
 // busy) is kept and retried first next time, so nothing is dropped here.
@@ -58,9 +60,11 @@ static void dictate_pump(void) {
         if (!dict_block_len)
             dict_block_len = audio_in_hal_read_adpcm(dict_block, sizeof(dict_block));
         if (!dict_block_len) return;
-        if (!ble_voice_send_chunk(dict_seq, 0x00, dict_block, (uint8_t)dict_block_len))
+        if (!ble_voice_send_chunk(dict_seq, dict_audio_flags,
+                                  dict_block, (uint8_t)dict_block_len))
             return;
         dict_seq++;
+        dict_sent_blocks++;
         dict_block_len = 0;
     }
 }
@@ -78,10 +82,23 @@ static void dictate_finish(void) {
         }
         delay(5);
     }
+    audio_in_voice_stats_t stats = {};
+    audio_in_hal_voice_stats(&stats);
+    const uint8_t eou_flags = (uint8_t)(dict_audio_flags | 0x01 |
+                              (stats.dropped_blocks ? 0x04 : 0x00));
     for (int i = 0; i < 100; i++) {
-        if (ble_voice_send_chunk(dict_seq, 0x01, nullptr, 0)) break;
+        if (ble_voice_send_chunk(dict_seq, eou_flags, nullptr, 0)) break;
         delay(5);
     }
+    Serial.printf("voice: mtu=%u rate=%lu block_samples=%u captured=%lu sent=%lu "
+                  "dropped=%lu queue_peak=%u\n",
+                  ble_voice_mtu(),
+                  (unsigned long)audio_in_hal_voice_sample_rate(),
+                  stats.samples_per_block,
+                  (unsigned long)stats.captured_blocks,
+                  (unsigned long)dict_sent_blocks,
+                  (unsigned long)stats.dropped_blocks,
+                  stats.queue_high_water);
     dict_seq++;
     dict_block_len = 0;
 }
@@ -149,14 +166,22 @@ static void dictate_start(void) {
             lv_label_set_text(transcript, "Connect to your Mac first.");
         return;
     }
-    mic_capture_ok = audio_in_hal_start();
+    const size_t payload_capacity = ble_voice_payload_capacity();
+    if (!payload_capacity) {
+        if (transcript)
+            lv_label_set_text(transcript, "Voice daemon not ready.");
+        return;
+    }
+    mic_capture_ok = audio_in_hal_start_voice(payload_capacity);
     if (!mic_capture_ok) {
         if (transcript)
-            lv_label_set_text(transcript, "No microphone on this board.");
+            lv_label_set_text(transcript, "Bluetooth audio link is too small.");
         return;
     }
     dict_seq       = 0;
     dict_block_len = 0;
+    dict_sent_blocks = 0;
+    dict_audio_flags = audio_in_hal_voice_sample_rate() == 8000 ? 0x02 : 0x00;
     set_state(VOICE_DICTATING);
     if (transcript) lv_label_set_text(transcript, "");
 }

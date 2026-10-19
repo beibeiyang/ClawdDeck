@@ -9,8 +9,9 @@
 static I2SClass* mic_i2s = nullptr;
 static bool      active  = false;
 static uint8_t   peak    = 0;
+static uint32_t  capture_sample_rate = 16000;
 
-static bool mic_hw_start(void) {
+static bool mic_hw_start(uint32_t sample_rate) {
     chime_suspend();
 
     audio_hal_codec_config_t cfg = {
@@ -19,7 +20,8 @@ static bool mic_hw_start(void) {
         .i2s_iface  = {
             .mode    = AUDIO_HAL_MODE_SLAVE,
             .fmt     = AUDIO_HAL_I2S_NORMAL,
-            .samples = AUDIO_HAL_16K_SAMPLES,
+            .samples = sample_rate == 8000 ? AUDIO_HAL_08K_SAMPLES
+                                           : AUDIO_HAL_16K_SAMPLES,
             .bits    = AUDIO_HAL_BIT_LENGTH_16BITS,
         },
     };
@@ -44,7 +46,7 @@ static bool mic_hw_start(void) {
 
     mic_i2s = new I2SClass();
     mic_i2s->setPins(SND_I2S_BCLK, SND_I2S_WS, -1, SND_I2S_DIN, SND_I2S_MCLK);
-    if (!mic_i2s->begin(I2S_MODE_STD, MIC_SAMPLE_RATE, I2S_DATA_BIT_WIDTH_16BIT,
+    if (!mic_i2s->begin(I2S_MODE_STD, sample_rate, I2S_DATA_BIT_WIDTH_16BIT,
                         I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH)) {
         es7210_adc_ctrl_state(cfg.codec_mode, AUDIO_HAL_CTRL_STOP);
         delete mic_i2s;
@@ -70,7 +72,8 @@ static void capture_task_stop(void);   // dictation capture task (below)
 
 bool audio_in_hal_start(void) {
     if (active) return true;
-    if (!mic_hw_start()) return false;
+    capture_sample_rate = MIC_SAMPLE_RATE;
+    if (!mic_hw_start(capture_sample_rate)) return false;
     active = true;
     peak   = 0;
     return true;
@@ -126,13 +129,22 @@ size_t audio_in_hal_read_stereo(int16_t* out, size_t frames) {
     return total;
 }
 
-// ---- Voice dictation: 16 kHz stereo → mono → IMA-ADPCM 4-bit ---------------
-// One call = one ADPCM block: 176 mono samples (11 ms) → 4-bit nibbles + an
-// IMA header (pred int16 LE + step u8 + reserved u8) = 4 bytes + 88 packed.
+// ---- Voice dictation: stereo → mono → IMA-ADPCM 4-bit ----------------------
+// Block size follows the subscribed BLE link's negotiated ATT MTU. At the
+// usual macOS MTU 185, a 179-byte block carries 350 mono samples (21.9 ms at
+// 16 kHz) and needs only 46 notifies/s instead of the former 91 notifies/s.
+// Smaller links fall back to 8 kHz only when a 16 kHz stream would outrun the
+// measured notification budget.
 // IMA table/logic = the ADPCM spec (Intel/DVI), decode lives on the daemon
 // side. The encoder pulls from the SAME I2S handle as tick() (reads are
 // exclusive per loop iteration — the voice app drives it, not micscope).
-#define ADPCM_SAMPLES_PER_BLOCK 176   // 11 ms... kept ≤ 179 so one block + 3-byte envelope fits a min-MTU (185) notify
+#define ADPCM_HEADER_BYTES          4
+#define ADPCM_MAX_BLOCK_BYTES     179   // + 3-byte envelope = 182 = MTU 185 value ceiling
+#define ADPCM_MAX_SAMPLES          ((ADPCM_MAX_BLOCK_BYTES - ADPCM_HEADER_BYTES) * 2)
+#define VOICE_MIN_PAYLOAD_BYTES     68   // 128 samples: 62.5 notifies/s at 8 kHz
+#define VOICE_16K_MIN_SAMPLES      300   // ≤53.4 notifies/s leaves useful link headroom
+
+static uint16_t adpcm_samples_per_block = 176;
 // IMA step-size table, 89 entries: indexes 64..88 saturate at 32767 —
 // the spec's table, mirrored by the daemon decoder.
 static const int32_t ima_step_table[89] = {
@@ -154,7 +166,8 @@ static bool    adpcm_reset_pending = true;
 
 // Encode one block from I2S into out (blocking on the mic). Task-side only.
 static size_t encode_block(uint8_t* out, size_t cap) {
-    if (!mic_i2s || cap < 4 + (ADPCM_SAMPLES_PER_BLOCK + 1) / 2)
+    const size_t target_samples = adpcm_samples_per_block;
+    if (!mic_i2s || cap < ADPCM_HEADER_BYTES + (target_samples + 1) / 2)
         return 0;
 
     if (adpcm_reset_pending) {       // fresh utterance: predictors from zero
@@ -163,15 +176,15 @@ static size_t encode_block(uint8_t* out, size_t cap) {
         adpcm_reset_pending = false;
     }
 
-    // Read 480 stereo frames from I2S (may come short — loop), fold to mono.
-    int16_t mono[ADPCM_SAMPLES_PER_BLOCK];
+    // Read one negotiated-size stereo block from I2S, then fold it to mono.
+    int16_t mono[ADPCM_MAX_SAMPLES];
     size_t have = 0;
-    while (have < ADPCM_SAMPLES_PER_BLOCK) {
+    while (have < target_samples) {
         int16_t st[64];
         const size_t got = mic_i2s->readBytes((char*)st, sizeof(st));
         if (got == 0) break;
         const size_t frames = got / (2 * sizeof(int16_t));
-        for (size_t i = 0; i < frames && have < ADPCM_SAMPLES_PER_BLOCK; i++)
+        for (size_t i = 0; i < frames && have < target_samples; i++)
             mono[have++] = (int16_t)(((int32_t)st[i * 2] + st[i * 2 + 1]) / 2);
     }
     if (have == 0) return 0;
@@ -187,7 +200,7 @@ static size_t encode_block(uint8_t* out, size_t cap) {
     // Zero-pad a short final block only on stop — here a short read means the
     // mic is not keeping up; emit what we have (block size = have samples).
     const size_t samples = have;
-    const size_t total   = 4 + (samples + 1) / 2;   // 4 hdr + packed nibbles
+    const size_t total   = ADPCM_HEADER_BYTES + (samples + 1) / 2;
     if (cap < total) return 0;
 
     // IMA header: predictor (int16 LE) + step index (u8) + reserved (u8)
@@ -235,27 +248,35 @@ static size_t encode_block(uint8_t* out, size_t cap) {
 // and the I2S DMA ring only holds ~90 ms — pulling one block per loop lost
 // most of the audio. A dedicated task keeps up with the mic and queues encoded
 // blocks; audio_in_hal_read_adpcm() pops them without blocking.
-#define ADPCM_BLOCK_BYTES (4 + ADPCM_SAMPLES_PER_BLOCK / 2)
-#define BLOCK_QUEUE_DEPTH 96   // ~1 s of audio of slack for UI / BLE stalls
+#define BLOCK_QUEUE_DEPTH 96   // >2 s slack at the normal 350-sample block
 
 struct adpcm_block_t {
     uint8_t len;
-    uint8_t data[ADPCM_BLOCK_BYTES];
+    uint8_t data[ADPCM_MAX_BLOCK_BYTES];
 };
 
 static QueueHandle_t block_q     = nullptr;
 static volatile bool capture_run = false;
+static volatile uint32_t captured_blocks = 0;
+static volatile uint32_t dropped_blocks = 0;
+static volatile uint16_t queue_high_water = 0;
 
 static void capture_task_fn(void*) {
     adpcm_block_t blk;
-    uint32_t dropped = 0;
     while (capture_run) {
         blk.len = (uint8_t)encode_block(blk.data, sizeof(blk.data));
-        if (blk.len && xQueueSend(block_q, &blk, 0) != pdTRUE) dropped++;
+        if (!blk.len) continue;
+        captured_blocks = captured_blocks + 1;
+        if (xQueueSend(block_q, &blk, 0) != pdTRUE) {
+            dropped_blocks = dropped_blocks + 1;
+        } else {
+            const UBaseType_t waiting = uxQueueMessagesWaiting(block_q);
+            if (waiting > queue_high_water) queue_high_water = (uint16_t)waiting;
+        }
     }
-    if (dropped)   // BLE couldn't keep up for long enough to fill the queue
+    if (dropped_blocks)   // BLE couldn't keep up for long enough to fill the queue
         Serial.printf("audio_in: block queue full, dropped %lu blocks\n",
-                      (unsigned long)dropped);
+                      (unsigned long)dropped_blocks);
     capture_task = nullptr;
     vTaskDelete(nullptr);
 }
@@ -265,6 +286,9 @@ static bool capture_task_start(void) {
     if (!block_q) return false;
     xQueueReset(block_q);
     adpcm_reset_pending = true;
+    captured_blocks = 0;
+    dropped_blocks = 0;
+    queue_high_water = 0;
     capture_run = true;
     if (xTaskCreate(capture_task_fn, "mic_capture", 4096, nullptr, 3,
                     &capture_task) != pdPASS) {
@@ -273,6 +297,35 @@ static bool capture_task_start(void) {
         return false;
     }
     return true;
+}
+
+bool audio_in_hal_start_voice(size_t max_payload) {
+    if (active || max_payload < VOICE_MIN_PAYLOAD_BYTES) return false;
+    if (max_payload > ADPCM_MAX_BLOCK_BYTES) max_payload = ADPCM_MAX_BLOCK_BYTES;
+
+    adpcm_samples_per_block = (uint16_t)((max_payload - ADPCM_HEADER_BYTES) * 2);
+    capture_sample_rate = adpcm_samples_per_block >= VOICE_16K_MIN_SAMPLES
+                            ? 16000 : 8000;
+    if (!mic_hw_start(capture_sample_rate)) return false;
+    active = true;
+    peak = 0;
+    Serial.printf("audio_in: voice %lu Hz, %u samples/block, %u-byte payload\n",
+                  (unsigned long)capture_sample_rate,
+                  (unsigned)adpcm_samples_per_block,
+                  (unsigned)(ADPCM_HEADER_BYTES + adpcm_samples_per_block / 2));
+    return true;
+}
+
+uint32_t audio_in_hal_voice_sample_rate(void) {
+    return capture_sample_rate;
+}
+
+void audio_in_hal_voice_stats(audio_in_voice_stats_t* out) {
+    if (!out) return;
+    out->captured_blocks = captured_blocks;
+    out->dropped_blocks = dropped_blocks;
+    out->queue_high_water = queue_high_water;
+    out->samples_per_block = adpcm_samples_per_block;
 }
 
 static void capture_task_stop(void) {

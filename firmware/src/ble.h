@@ -1,4 +1,5 @@
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 
 enum ble_state_t {
@@ -29,8 +30,13 @@ const char* ble_bridge_take_rx(void);
 
 // Voice dictation: binary chunk stream device -> host (VOICE char 0x07).
 // One call = one notification; seq/flags/len envelope, payload ≤ 244 bytes.
-// flags bit0 = end-of-utterance.
+// flags bit0 = end-of-utterance; bit1 = 8 kHz audio (clear = 16 kHz);
+// bit2 on EOU = capture queue overrun (host must reject damaged audio).
 // Returns false if the notify could not be queued (not connected / link busy).
+// payload_capacity is 0 until the daemon subscribes, and is bounded so the
+// envelope always fits the negotiated ATT MTU without silent truncation.
+size_t ble_voice_payload_capacity(void);
+uint16_t ble_voice_mtu(void);
 bool ble_voice_send_chunk(uint8_t seq, uint8_t flags, const uint8_t* data, uint8_t len);
 
 void ble_set_battery_level(int pct);

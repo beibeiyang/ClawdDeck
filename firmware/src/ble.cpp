@@ -68,6 +68,14 @@ static NimBLECharacteristic* host_rx_char = nullptr;
 static NimBLECharacteristic* dev_cmd_char = nullptr;
 static NimBLECharacteristic* voice_char = nullptr;
 
+// The VOICE stream belongs to the daemon connection that subscribed to it.
+// Keeping its handle prevents custom notifies from being copied to unrelated
+// peers (for example a second OS-held HID connection), and gives us its real
+// negotiated ATT MTU for lossless packet sizing.
+static const uint16_t VOICE_CONN_NONE = 0xFFFF;
+static volatile uint16_t voice_conn_handle = VOICE_CONN_NONE;
+static volatile uint16_t voice_att_mtu = 23;
+
 static ble_state_t state = BLE_STATE_INIT;
 static bool need_advertise = false;
 
@@ -218,6 +226,10 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         // reuses conn handles, so stale state would leak onto the next link.
         if (param_fix_handle == info.getConnHandle()) param_fix_handle = CONN_HANDLE_NONE;
         if (param_fix_spent  == info.getConnHandle()) param_fix_spent  = CONN_HANDLE_NONE;
+        if (voice_conn_handle == info.getConnHandle()) {
+            voice_conn_handle = VOICE_CONN_NONE;
+            voice_att_mtu = 23;
+        }
         Serial.printf("BLE: disconnected (reason=%d, remaining=%u)\n",
             reason, (unsigned)s->getConnectedCount());
     }
@@ -242,6 +254,12 @@ class ServerCallbacks : public NimBLEServerCallbacks {
             param_fix_handle = info.getConnHandle();
             param_fix_at_ms  = millis() + 2000;
         }
+    }
+
+    void onMTUChange(uint16_t mtu, NimBLEConnInfo& info) override {
+        Serial.printf("BLE: MTU update handle=%u mtu=%u\n",
+                      info.getConnHandle(), mtu);
+        if (voice_conn_handle == info.getConnHandle()) voice_att_mtu = mtu;
     }
 
     // Lock the board to a single owner machine. The first machine to bond
@@ -334,6 +352,23 @@ class ReqCallbacks : public NimBLECharacteristicCallbacks {
     }
 };
 
+class VoiceCallbacks : public NimBLECharacteristicCallbacks {
+    void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo& info,
+                     uint16_t subValue) override {
+        if (subValue & 0x01) {
+            voice_conn_handle = info.getConnHandle();
+            voice_att_mtu = info.getMTU();
+            Serial.printf("BLE: voice subscribed handle=%u mtu=%u payload=%u\n",
+                          voice_conn_handle, voice_att_mtu,
+                          (unsigned)ble_voice_payload_capacity());
+        } else if (voice_conn_handle == info.getConnHandle()) {
+            Serial.printf("BLE: voice unsubscribed handle=%u\n", voice_conn_handle);
+            voice_conn_handle = VOICE_CONN_NONE;
+            voice_att_mtu = 23;
+        }
+    }
+};
+
 void ble_init(void) {
     NimBLEDevice::init(DEVICE_NAME);
     NimBLEDevice::setSecurityAuth(true, false, true);  // bonding, no MITM, SC
@@ -410,6 +445,8 @@ void ble_init(void) {
         VOICE_CHAR_UUID,
         NIMBLE_PROPERTY::NOTIFY
     );
+    static VoiceCallbacks voiceCb;
+    voice_char->setCallbacks(&voiceCb);
 
     svc->start();
     server->start();
@@ -525,23 +562,37 @@ void ble_request_refresh(void) {
 
 // ---- Voice dictation transport ---------------------------------------------
 // Chunk stream to the host over the VOICE characteristic: binary notifies of
-// [seq:u8][flags:u8][len:u8][payload...] (payload ≤ 244 = one ADPCM block).
-// flags bit0 = end-of-utterance. The SENDER paces itself: one notify per call
+// [seq:u8][flags:u8][len:u8][payload...] (one self-contained ADPCM block).
+// flags bit0 = end-of-utterance; bit1 = 8 kHz; bit2 on EOU = capture
+// overrun. The SENDER paces itself: one notify per call
 // — notify() fails (returns false) when the connection event budget is
 // exhausted; the caller retries the same block next tick.
+size_t ble_voice_payload_capacity(void) {
+    if (voice_conn_handle == VOICE_CONN_NONE || voice_att_mtu <= 6) return 0;
+    size_t cap = (size_t)voice_att_mtu - 6;  // ATT opcode+handle (3), envelope (3)
+    if (cap > 179) cap = 179;               // 350 samples / 21.9 ms at 16 kHz
+    return cap;
+}
+
+uint16_t ble_voice_mtu(void) {
+    return voice_conn_handle == VOICE_CONN_NONE ? 0 : voice_att_mtu;
+}
+
 bool ble_voice_send_chunk(uint8_t seq, uint8_t flags, const uint8_t* data, uint8_t len) {
-    if (state != BLE_STATE_CONNECTED || !voice_char) return false;
-    static uint8_t buf[3 + 244];
+    const uint16_t handle = voice_conn_handle;
+    const size_t capacity = ble_voice_payload_capacity();
+    if (state != BLE_STATE_CONNECTED || !voice_char ||
+        handle == VOICE_CONN_NONE || len > capacity) return false;
+    static uint8_t buf[3 + 179];
     buf[0] = seq;
     buf[1] = flags;
     buf[2] = len;
-    if (len > 251) return false;   // notify payload ≤ (MTU-3)-3; MTU≥185 ⇒ ≤182: keep len ≤ 180
     if (len) memcpy(buf + 3, data, len);
     // notify(data, len) copies this chunk into its own mbuf now. The no-arg
     // notify() only flags the characteristic as updated and the host later
     // sends whatever value is current, so rapid chunks were duplicated or
     // skipped — and it always reported success.
-    return voice_char->notify(buf, (size_t)3 + len);
+    return voice_char->notify(buf, (size_t)3 + len, handle);
 }
 
 void ble_bridge_send_cmd(const char* json) {
