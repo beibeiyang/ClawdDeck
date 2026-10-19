@@ -38,6 +38,8 @@ bool imu_hal_read_accel(float* ax, float* ay, float* az) {
     if (!sim_ok || !ax || !ay || !az) return false;
     const float pr = sim_pitch * 0.0174533f;
     const float rr = sim_roll  * 0.0174533f;
+    // Use the same sign convention as the mounted QMI8658: positive simulated
+    // roll/pitch pulls the ball toward the corresponding panel low side.
     *ax = sinf(rr);
     *ay = sinf(pr);
     *az = cosf(pr) * cosf(rr);

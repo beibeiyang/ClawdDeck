@@ -85,7 +85,10 @@ git commit -m "build: restore native simulator on macOS"
 In `test_main.cpp`, add checks named:
 
 - `flat_projects_to_center` — zero corrected X/Y returns `x == 0`, `y == 0`, `tilt_deg == 0`.
-- `upright_projects_to_six_oclock` — a unit panel-down vector returns `x == 0`, positive saturated `y`, and approximately `90°`.
+- `upright_projects_to_six_oclock` — a unit panel-down gravity vector returns `x == 0`, positive saturated `y`, and approximately `90°`.
+- `upright_sensor_maps_to_six_oclock` — the mounted accelerometer's observed positive X direction maps to the 6-o'clock edge.
+- `flat_sensor_residual_stays_centered` — a small combined X/Y residual remains inside the radial flat deadzone.
+- `any_clear_tilt_reaches_the_gravity_edge` — non-flat gravity reaches the track perimeter instead of scaling travel by degrees.
 - `physical_low_edge_survives_all_rotations` — expected X/Y signs for rotation quadrants 0–3.
 - `travel_saturates_at_track_radius` — values beyond the usable radius never exceed `max_offset`.
 - `calibration_averages_mount_bias` — the specified sample count averages deterministic X/Y samples.
@@ -99,7 +102,7 @@ Expected: FAIL because `apps/level/level_model.h` does not exist.
 
 - [ ] **Step 3: Implement the pure model interfaces**
 
-Use board/panel gravity components after bias subtraction, rotate them through the frozen display quadrant, derive tilt with `asin(clamp(magnitude, 0, 1))`, and scale travel across the full 0–90° range before saturating at `max_offset`. Keep calibration sample count and accumulator state in the pure header so tests do not require Arduino or LVGL.
+Convert calibrated QMI8658 samples to panel space using the observed board-axis signs, rotate through the frozen display quadrant, derive tilt with `asin(clamp(magnitude, 0, 1))`, and place any vector outside a small radial flat deadzone at `max_offset`. Keep calibration sample count and accumulator state in the pure header so tests do not require Arduino or LVGL.
 
 - [ ] **Step 4: Run the pure test and verify it passes**
 

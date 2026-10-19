@@ -49,6 +49,41 @@ static void travel_saturates_at_track_radius() {
     CHECK(near(p.tilt_deg, 90.0f, 0.01f));
 }
 
+static void any_clear_tilt_reaches_the_gravity_edge() {
+    const LevelProjection p = level_project(0.15f, 0.20f, 0, 72.0f);
+    CHECK(near(std::sqrt(p.x * p.x + p.y * p.y), 72.0f, 0.01f));
+}
+
+static void upright_sensor_maps_to_six_oclock() {
+    // On the mounted QMI8658, positive X is the panel-down direction.
+    const LevelProjection p = level_project_sensor(1.0f, 0.0f, 0, 72.0f);
+    CHECK(near(p.x, 0.0f, 0.01f));
+    CHECK(near(p.y, 72.0f, 0.01f));
+}
+
+static void diagonal_low_side_reaches_right_and_lower_edge() {
+    const LevelProjection p = level_project_sensor(0.20f, 0.20f, 0, 72.0f);
+    CHECK(p.x > 0.0f && p.y > 0.0f);
+    CHECK(near(std::sqrt(p.x * p.x + p.y * p.y), 72.0f, 0.01f));
+}
+
+static void sensor_cardinal_edges_follow_observed_panel_directions() {
+    const LevelProjection down = level_project_sensor( 1.0f,  0.0f, 0, 72.0f);
+    const LevelProjection up   = level_project_sensor(-1.0f,  0.0f, 0, 72.0f);
+    const LevelProjection right= level_project_sensor( 0.0f,  1.0f, 0, 72.0f);
+    const LevelProjection left = level_project_sensor( 0.0f, -1.0f, 0, 72.0f);
+    CHECK(down.y > 0.0f && near(down.x, 0.0f));
+    CHECK(up.y < 0.0f && near(up.x, 0.0f));
+    CHECK(right.x > 0.0f && near(right.y, 0.0f));
+    CHECK(left.x < 0.0f && near(left.y, 0.0f));
+}
+
+static void flat_sensor_residual_stays_centered() {
+    const LevelProjection p = level_project_sensor(0.06f, -0.07f, 0, 72.0f);
+    CHECK(near(p.x, 0.0f));
+    CHECK(near(p.y, 0.0f));
+}
+
 static void calibration_averages_mount_bias() {
     LevelCalibration cal;
     level_calibration_begin(&cal);
@@ -91,6 +126,11 @@ int main() {
     upright_projects_to_six_oclock();
     physical_low_edge_survives_all_rotations();
     travel_saturates_at_track_radius();
+    any_clear_tilt_reaches_the_gravity_edge();
+    upright_sensor_maps_to_six_oclock();
+    diagonal_low_side_reaches_right_and_lower_edge();
+    sensor_cardinal_edges_follow_observed_panel_directions();
+    flat_sensor_residual_stays_centered();
     calibration_averages_mount_bias();
     incomplete_calibration_emits_no_bias();
 

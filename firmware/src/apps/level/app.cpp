@@ -188,9 +188,8 @@ void level_tick() {
         return;
     }
 
-    // The QMI8658's sensor X/Y axes are exchanged relative to the panel.
-    const LevelProjection projection = level_project(
-        gravity_y, gravity_x, screen_rotation, (float)max_offset);
+    const LevelProjection projection = level_project_sensor(
+        gravity_x, gravity_y, screen_rotation, (float)max_offset);
 
     ball_x += (projection.x - ball_x) * FOLLOW;
     ball_y += (projection.y - ball_y) * FOLLOW;

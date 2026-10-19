@@ -116,10 +116,13 @@ Level is a gravity instrument, not an opening-pose bubble level:
 - Rotating the deck while vertical moves the ball around the track consistently
   with the frozen display orientation.
 
-The current QMI8658-to-panel mapping remains the starting point, but calibration
-is applied in sensor/panel space before display rotation. Travel scales with
-tilt and saturates at the track edge; it does not stop representing gravity
-after the former 12-degree spirit-level range.
+The current QMI8658-to-panel axis mapping follows the physical direction
+observed on the board; calibration is applied in sensor/panel space before
+display rotation. A small radial deadzone keeps sensor noise on a flat table
+from pulling the ball off center. Once the calibrated vector clears that
+deadzone, the ball settles at the track edge in the low-side direction;
+smoothing controls how quickly it gets there. Tilt magnitude remains available
+for the degree readout, but does not strand the ball partway across the dial.
 
 ### Calibration
 

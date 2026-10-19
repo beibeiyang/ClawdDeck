@@ -10,6 +10,7 @@ struct LevelProjection {
 };
 
 constexpr int LEVEL_CAL_SAMPLES = 64;
+constexpr float LEVEL_VECTOR_DEADZONE = 0.10f;
 
 struct LevelCalibration {
     float sum_x;
@@ -34,12 +35,22 @@ inline LevelProjection level_project(float panel_x, float panel_y,
     const float tilt_deg = asinf(unit_magnitude) * 57.2957795f;
 
     LevelProjection result = {0.0f, 0.0f, tilt_deg};
-    if (magnitude <= 0.0001f || max_offset <= 0.0f) return result;
+    if (magnitude <= LEVEL_VECTOR_DEADZONE || max_offset <= 0.0f) return result;
 
-    const float travel = max_offset * (tilt_deg / 90.0f);
-    result.x = screen_x / magnitude * travel;
-    result.y = screen_y / magnitude * travel;
+    // Level is a gravity ball, not a bubble whose travel is proportional to
+    // degrees: any measurable tilt pulls it to the low edge. The deadzone is
+    // applied to sensor samples before they reach this model.
+    result.x = screen_x / magnitude * max_offset;
+    result.y = screen_y / magnitude * max_offset;
     return result;
+}
+
+inline LevelProjection level_project_sensor(float sensor_x, float sensor_y,
+                                            uint8_t rotation, float max_offset) {
+    // This board's QMI8658 X/Y axes are exchanged relative to the panel.
+    // Sensor signs are already aligned with the board's physical low-side
+    // directions; retain them when mapping into panel space.
+    return level_project(sensor_y, sensor_x, rotation, max_offset);
 }
 
 inline void level_calibration_begin(LevelCalibration* cal) {
