@@ -47,8 +47,44 @@ static uint32_t      processing_at = 0;
 // Dictate stream state (mic tile hold): ADPCM blocks → ble_voice_send_chunk.
 static uint8_t  dict_seq        = 0;
 static bool     mic_capture_ok  = false;
-static uint32_t last_chunk_ms   = 0;
 static uint32_t transcribe_from = 0;
+static uint8_t  dict_block[96];      // block awaiting a notify slot
+static size_t   dict_block_len  = 0;
+
+// Send every captured block that's ready. A block whose notify fails (link
+// busy) is kept and retried first next time, so nothing is dropped here.
+static void dictate_pump(void) {
+    for (int i = 0; i < 32; i++) {   // bound one tick's work
+        if (!dict_block_len)
+            dict_block_len = audio_in_hal_read_adpcm(dict_block, sizeof(dict_block));
+        if (!dict_block_len) return;
+        if (!ble_voice_send_chunk(dict_seq, 0x00, dict_block, (uint8_t)dict_block_len))
+            return;
+        dict_seq++;
+        dict_block_len = 0;
+    }
+}
+
+// Stop the mic, flush every block captured before the stop, then close the
+// stream with the EOU marker. Retries are bounded (~3 s) so a dead link can't
+// hang the UI; a lost EOU would leave the daemon waiting forever.
+static void dictate_finish(void) {
+    audio_in_hal_stop();
+    for (int i = 0; i < 600; i++) {
+        dictate_pump();
+        if (!dict_block_len) {
+            dict_block_len = audio_in_hal_read_adpcm(dict_block, sizeof(dict_block));
+            if (!dict_block_len) break;   // queue empty: tail flushed
+        }
+        delay(5);
+    }
+    for (int i = 0; i < 100; i++) {
+        if (ble_voice_send_chunk(dict_seq, 0x01, nullptr, 0)) break;
+        delay(5);
+    }
+    dict_seq++;
+    dict_block_len = 0;
+}
 
 static void set_state(voice_state_t next) {
     state = next;
@@ -119,17 +155,15 @@ static void dictate_start(void) {
             lv_label_set_text(transcript, "No microphone on this board.");
         return;
     }
-    dict_seq      = 0;
-    last_chunk_ms = lv_tick_get();
+    dict_seq       = 0;
+    dict_block_len = 0;
     set_state(VOICE_DICTATING);
     if (transcript) lv_label_set_text(transcript, "");
 }
 
 static void dictate_stop(void) {
     if (state != VOICE_DICTATING) return;
-    audio_in_hal_stop();
-    // end-of-utterance marker: empty payload, EOU flag set
-    ble_voice_send_chunk(dict_seq++, 0x01, nullptr, 0);
+    dictate_finish();
     set_state(VOICE_TRANSCRIBING);
 }
 
@@ -138,12 +172,23 @@ static void dictate_stop(void) {
 // voice_on_button/voice_tick; that path must not double-handle releases).
 // The mic tile itself = DICTATE now (hold): PTT stays on BOOT per the design
 // (voice_on_button). The pressed LOOK lives in LV_STATE_PRESSED styles.
+// The touch controller reports brief releases while a finger is held, so a
+// release only ends dictation once it has lasted RELEASE_DEBOUNCE_MS; a
+// re-press inside that window continues the same utterance.
+#define RELEASE_DEBOUNCE_MS 250
+static bool     release_pending = false;
+static uint32_t release_at      = 0;
+
 static void mic_event(lv_event_t* e) {
     const lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_PRESSED) {
-        dictate_start();
+        if (release_pending) release_pending = false;   // flicker: keep recording
+        else dictate_start();
     } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
-        dictate_stop();
+        if (state == VOICE_DICTATING && !release_pending) {
+            release_pending = true;
+            release_at      = lv_tick_get();
+        }
     }
 }
 
@@ -318,10 +363,8 @@ static void voice_create(lv_obj_t* root) {
 static void voice_destroy(void) {
     // A dictation cut short by leaving the app: stop the mic + close the
     // chunk stream so the daemon doesn't wait on an EOU that never comes.
-    if (state == VOICE_DICTATING) {
-        audio_in_hal_stop();
-        ble_voice_send_chunk(dict_seq++, 0x01, nullptr, 0);
-    }
+    if (state == VOICE_DICTATING) dictate_finish();
+    release_pending = false;
     mic_btn = nullptr;
     mic_glyph = nullptr;
     state_lbl = nullptr;
@@ -346,29 +389,22 @@ static void voice_tick(void) {
         ptt_stop();
     }
 
-    // REAL mic level now: the shared peak (audio_in_hal_tick feeds it from the
-    // I2S stream the dictation path reads — one consumer per loop, no steal).
+    // Level meter: PTT shows a placeholder (the mic is the Mac's); dictation
+    // shows the real peak, fed by the board's capture path.
     if (state == VOICE_RECORDING && level_bar) {
         const int v = 25 + (int)(lv_tick_get() / 40 % 60);
         (void)v;   // PTT path keeps the placeholder — the mic there is the Mac's
         lv_bar_set_value(level_bar, 25 + (int)(lv_tick_get() / 40 % 60), LV_ANIM_OFF);
     }
     if (state == VOICE_DICTATING && level_bar) {
-        audio_in_hal_tick();
         lv_bar_set_value(level_bar, audio_in_hal_peak(), LV_ANIM_OFF);
     }
 
-    // Dictate chunk pump: ~2 ADPCM blocks (22 ms audio) per tick at the
-    // main-loop cadence, real-time-ish; notify drops when the link is busy
-    // are tolerated (seq resync on the daemon).
-    if (state == VOICE_DICTATING && mic_capture_ok) {
-        static uint8_t chunk[96];
-        const uint32_t now = lv_tick_get();
-        if (now - last_chunk_ms >= 11) {
-            const size_t n = audio_in_hal_read_adpcm(chunk, sizeof(chunk));
-            if (n) ble_voice_send_chunk(dict_seq++, 0x00, chunk, (uint8_t)(n > 250 ? 250 : n));
-            last_chunk_ms = now;
-        }
+    // Dictate chunk pump: capture runs in real time on its own; drain it.
+    if (state == VOICE_DICTATING && mic_capture_ok) dictate_pump();
+    if (release_pending && lv_tick_elaps(release_at) >= RELEASE_DEBOUNCE_MS) {
+        release_pending = false;
+        dictate_stop();
     }
 
     // Dictate reply: the 'vt' payload from the daemon (JSON bridge rx).
@@ -389,7 +425,17 @@ static void voice_tick(void) {
             }
         } else if (rx && strstr(rx, "\"t\":\"err\"")) {
             set_state(VOICE_IDLE);
-            if (transcript) lv_label_set_text(transcript, "Host error — see daemon log.");
+            // Show the daemon's message ("m"); generic text if it has none.
+            static char msg[96];
+            const char* m = strstr(rx, "\"m\":\"");
+            size_t o = 0;
+            if (m) {
+                m += 5;
+                while (*m && *m != '"' && o < sizeof(msg) - 1) msg[o++] = *m++;
+            }
+            msg[o] = '\0';
+            if (transcript)
+                lv_label_set_text(transcript, o ? msg : "Host error — see daemon log.");
         }
         if (lv_tick_elaps(processing_at) > 15000) {  // 15s no reply = give up
             set_state(VOICE_IDLE);

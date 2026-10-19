@@ -825,10 +825,12 @@ class Session:
         # own predictor header, so a gap = an audible blip, not a crash).
         while not self._voice_queue.empty():
             chunk = await self._voice_queue.get()
-            if len(chunk) < 4:
+            if len(chunk) < 3:   # EOU is a bare 3-byte header (empty payload)
                 continue
-            seq, flags, ln = chunk[0], chunk[1], chunk[2]
-            payload = bytes(chunk[3:3 + min(ln, len(chunk) - 3)])
+            seq, flags = chunk[0], chunk[1]
+            # The notify is already length-delimited; the envelope's len byte
+            # is redundant (and was left 0 by older firmware), so ignore it.
+            payload = bytes(chunk[3:])
             if self._voice_last_seq is not None and seq != (self._voice_last_seq + 1) & 0xFF:
                 log(f"Voice: seq gap {self._voice_last_seq} -> {seq} (dropped chunks tolerated)")
             self._voice_last_seq = seq
@@ -841,16 +843,24 @@ class Session:
         self._voice_buf.clear()
         self._voice_last_seq = None
         if not audio_bytes:
+            log("Voice: end-of-utterance with no audio")
+            await self.write_bridge({"t": "err", "m": "No audio received"})
             return
         pcm = ima_adpcm_decode(audio_bytes, SAMPLE_RATE_VOICE)  # int16 mono 16k
         if pcm is None or len(pcm) == 0:
             await self.write_bridge({"t": "err", "m": "Voice decode failed"})
             return
         dur = len(pcm) / SAMPLE_RATE_VOICE
+        if dur < 0.3:   # a tap, not speech — whisper would only hallucinate
+            log(f"Voice: {dur:.2f}s utterance — too short, skipped")
+            await self.write_bridge({"t": "err", "m": "Too short - hold to talk"})
+            return
         log(f"Voice: {len(pcm)} samples ({dur:.1f}s) — transcribing")
         text = whisper_transcribe(pcm)
         if text is None:
-            await self.write_bridge({"t": "err", "m": "Whisper unavailable"})
+            # whisper_transcribe logs its own failures; None with no log line
+            # just means it heard no speech.
+            await self.write_bridge({"t": "err", "m": "No speech recognized"})
             return
         await self.write_bridge({"t": "vt", "tx": text})
 
