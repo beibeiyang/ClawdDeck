@@ -28,5 +28,10 @@ void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h,
 // brightness back up. No-op on boards without rotation.
 void display_hal_tick(void);
 
+// Full-panel paint for the launcher bypass swipe engine (engine composites
+// the display-facing frame itself; no per-call rotation). Absent on boards
+// whose display HAL does not provide it — the engine gates on PSRAM anyway.
+void display_hal_paint_full(const uint16_t* pixels);
+
 // LVGL flush regions must be even-aligned on the CO5300; harmless on others.
 void display_hal_round_area(int32_t* x1, int32_t* y1, int32_t* x2, int32_t* y2);

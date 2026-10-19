@@ -17,10 +17,9 @@
 
 #include "hal/board_caps.h"
 #include "hal/display_hal.h"
-#ifdef BOARD_SIM
 void launcher_bench_start(void);
 void launcher_bench_tick(void);
-#endif
+void launcher_swipe_tick(void);   // bypass swipe engine: touch tracking + settle
 #include "hal/touch_hal.h"
 #include "hal/input_hal.h"
 #include "hal/power_hal.h"
@@ -42,12 +41,25 @@ static UsageData usage = {};
 #endif
 static uint16_t* buf1 = nullptr;
 static uint16_t* buf2 = nullptr;
+static int STRIP_LINES = BUF_LINES;   // actual strip height after SRAM/SPIRAM choice
+
+// bench flush instrumentation (main.cpp-local, read from launcher bench tick)
+volatile uint32_t bench_flush_px = 0;
+volatile uint32_t bench_flush_calls = 0;
+volatile uint32_t bench_flush_last_w = 0, bench_flush_last_h = 0;
+static inline uint32_t bench_flush_us_now(void) {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)(ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000);
+}
 
 static uint32_t my_tick(void) { return millis(); }
 
 static void my_flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map) {
     int32_t w = area->x2 - area->x1 + 1;
     int32_t h = area->y2 - area->y1 + 1;
+    bench_flush_px += (uint32_t)w * h;
+    bench_flush_calls++;
+    bench_flush_last_w = w; bench_flush_last_h = h;
     display_hal_draw_bitmap(area->x1, area->y1, w, h, (uint16_t*)px_map);
     lv_display_flush_ready(disp);
 }
@@ -206,9 +218,21 @@ static void check_serial_cmd() {
             // can be scripted. `apps` lists the ids this board actually shows.
             else if (strcmp(cmd_buf, "home") == 0)  shell_go_home();
             else if (strncmp(cmd_buf, "open ", 5) == 0) shell_open_id(cmd_buf + 5);
-        #ifdef BOARD_SIM
-    else if (strcmp(cmd_buf, "bench") == 0)  launcher_bench_start();
-#endif
+            else if (strcmp(cmd_buf, "bench") == 0) launcher_bench_start();
+            else if (strcmp(cmd_buf, "unpair") == 0) {
+                Serial.println("serial unpair: clearing BLE bonds + owner");
+                ble_clear_bonds();
+            }
+            else if (strcmp(cmd_buf, "flushclr") == 0) {
+                extern volatile uint32_t bench_flush_px, bench_flush_calls;
+                bench_flush_px = 0; bench_flush_calls = 0;
+            }
+            else if (strcmp(cmd_buf, "flushdbg") == 0) {
+                extern volatile uint32_t bench_flush_px, bench_flush_calls;
+                Serial.printf("[flush] px=%lu calls=%lu\n",
+                              (unsigned long)bench_flush_px,
+                              (unsigned long)bench_flush_calls);
+            }
     else if (strcmp(cmd_buf, "apps") == 0) {
                 for (int i = 0; i < shell_app_count(); i++)
                     Serial.printf("%d %s\n", i, shell_app_at(i)->id);
@@ -303,19 +327,48 @@ void setup() {
 
     lv_tick_set_cb(my_tick);
 
-    buf1 = (uint16_t*)heap_caps_malloc(W * BUF_LINES * 2, LV_BUF_CAPS);
-    buf2 = (uint16_t*)heap_caps_malloc(W * BUF_LINES * 2, LV_BUF_CAPS);
+    // Full-screen render buffer: a whole-screen invalidation (app entry,
+    // rotation, splash load) renders and flushes in ONE pass (~150ms total)
+    // instead of walking 24 serialized 20-line strips (~1.2s visible top-down
+    // sweep — the "renders top to bottom over seconds" feel). Small invalids
+    // still render only the invalidated sub-rect of this buffer (LVGL clips
+    // the render to the dirty area), so steady-state cost is unchanged.
+    // PSRAM is required (460KB each; SRAM total is ~300KB) — H1 measured the
+    // strip-placement effect as neutral on this board, and for a one-shot
+    // full the flush dominates anyway. Kept double-buffered for parity.
+#ifdef BOARD_HAS_PSRAM
+    buf1 = (uint16_t*)heap_caps_malloc((size_t)W * H * 2, MALLOC_CAP_SPIRAM);
+    buf2 = (uint16_t*)heap_caps_malloc((size_t)W * H * 2, MALLOC_CAP_SPIRAM);
+    if (buf1 && buf2) {
+        STRIP_LINES = H;
+        Serial.println("[perf] strips: PSRAM full-screen (one-shot fulls)");
+    }
+#endif
+    if (!buf1 || !buf2) {   // no-PSRAM / alloc-failed boards keep strip buffers
+        heap_caps_free(buf1); heap_caps_free(buf2);
+        buf1 = (uint16_t*)heap_caps_malloc(W * BUF_LINES * 2, LV_BUF_CAPS);
+        buf2 = (uint16_t*)heap_caps_malloc(W * BUF_LINES * 2, LV_BUF_CAPS);
+        STRIP_LINES = BUF_LINES;
+        Serial.println("[perf] strips: strip buffers (fallback)");
+    }
 
     lv_display_t* disp = lv_display_create(W, H);
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
     lv_display_set_flush_cb(disp, my_flush_cb);
-    lv_display_set_buffers(disp, buf1, buf2, W * BUF_LINES * 2,
+    lv_display_set_buffers(disp, buf1, buf2, W * STRIP_LINES * 2,
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_add_event_cb(disp, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL);
 
     lv_indev_t* indev = lv_indev_create();
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(indev, my_touch_cb);
+    // 100Hz touch tracking (default = refresh period 33ms reads the touch
+    // every other swipe frame; the bypass engine reads at loop rate anyway,
+    // this tightens LVGL's own press/gesture timing to match).
+    {
+        lv_timer_t* rt = lv_indev_get_read_timer(indev);
+        if (rt) lv_timer_set_period(rt, 10);
+    }
 
     ble_init();
     input_hal_init();
@@ -327,8 +380,10 @@ void setup() {
     shell_set_battery(power_hal_battery_pct(), power_hal_is_charging());
     display_hal_tick();   // seed rotation baseline — after LVGL + IMU are up
 
-    Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on BLE...\n",
-        board_caps().name, W, H);
+    Serial.printf("BUILD swipebench-hw-v3 %s %dx%d int-heap=%u psram-heap=%u\n",
+        board_caps().name, W, H,
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 }
 
 static ble_state_t last_ble_state = BLE_STATE_INIT;
@@ -379,6 +434,7 @@ static void pair_tick(void) {
         if (pair_state == PAIR_ARMED) {
             Serial.println("Pair: released in window — clearing bonds, advertising");
             ble_clear_bonds();
+            ble_set_pairable(true);   // deliberate gesture = open the door
             sound_hal_play_reset();   // audible ack — the screen may already show
                                       // the pairing hint, so there's little to see
             idle_set_awake_brightness(brightness_get()); // undo any rotation blank
@@ -404,9 +460,8 @@ void loop() {
     idle_tick();
     lv_timer_handler();
     shell_tick();       // status bar + the foreground app's own tick
-#ifdef BOARD_SIM
+    launcher_swipe_tick();   // bypass swipe engine (arm-on-intent / settle)
     launcher_bench_tick();
-#endif
     ble_tick();
     power_hal_tick();
     imu_hal_tick();

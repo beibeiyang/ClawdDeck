@@ -97,3 +97,8 @@ void sim_display_screenshot(const char* path) {
     else printf("screenshot failed: %s\n", SDL_GetError());
     if (s) SDL_FreeSurface(s);
 }
+
+// Sim display: paint_full = full-panel blit through the normal draw path
+void display_hal_paint_full(const uint16_t* pixels) {
+    display_hal_draw_bitmap(0, 0, LCD_WIDTH, LCD_HEIGHT, pixels);
+}

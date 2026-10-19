@@ -42,3 +42,4 @@ research/tooling/
 screenshots/gauntlet-*
 screenshots/*.bmp
 screenshots/perf-*.png
+.session-state.md

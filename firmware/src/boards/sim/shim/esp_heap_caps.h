@@ -12,3 +12,5 @@ static inline void* heap_caps_malloc(size_t size, unsigned caps) {
     return malloc(size);
 }
 static inline void heap_caps_free(void* ptr) { free(ptr); }
+
+static inline size_t heap_caps_get_free_size(unsigned caps) { (void)caps; return 1 << 20; }

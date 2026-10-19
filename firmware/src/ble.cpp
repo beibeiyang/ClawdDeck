@@ -13,6 +13,7 @@
 #define REQ_CHAR_UUID       "4c41555a-4465-7669-6365-000000000004"  // device-initiated refresh request
 #define HOST_RX_CHAR_UUID   "4c41555a-4465-7669-6365-000000000005"  // host -> device bridge payloads
 #define DEV_CMD_CHAR_UUID   "4c41555a-4465-7669-6365-000000000006"  // device -> host bridge commands
+#define VOICE_CHAR_UUID     "4c41555a-4465-7669-6365-000000000007"  // device -> host voice chunks (binary)
 
 #define BLE_BUF_SIZE 512
 
@@ -65,6 +66,7 @@ static NimBLECharacteristic* rx_char = nullptr;
 static NimBLECharacteristic* req_char = nullptr;
 static NimBLECharacteristic* host_rx_char = nullptr;
 static NimBLECharacteristic* dev_cmd_char = nullptr;
+static NimBLECharacteristic* voice_char = nullptr;
 
 static ble_state_t state = BLE_STATE_INIT;
 static bool need_advertise = false;
@@ -152,7 +154,11 @@ static void claim_owner(const std::string& id) {
     prune_foreign_bonds();
 }
 
+static bool pairable = true;   // false = air-gap: no advertise, no new bonds
+static bool suppress_advertising = false;
+
 static void start_advertising() {
+    if (suppress_advertising) return;   // air-gapped: stay invisible
     NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
     adv->reset();
     // Primary advertising packet (≤31 bytes):
@@ -254,6 +260,15 @@ class ServerCallbacks : public NimBLEServerCallbacks {
             param_fix_at_ms  = millis() + 2000;
         }
         if (id == ZERO_ADDR) return;
+        if (!pairable) {
+            // Air-gap: refuse EVERY bond/claim until pairing is re-armed
+            // (hold-PWR gesture / explicit arm). The reclaim-race breaker:
+            // 'clear pairing' while a Mac is in range could never stick.
+            Serial.printf("BLE: rejecting bond (%s) — not pairable\n", id.c_str());
+            NimBLEDevice::deleteBond(info.getIdAddress());
+            server->disconnect(info);
+            return;
+        }
         if (!owner_set) {
             claim_owner(id);
         } else if (strcmp(id.c_str(), owner_addr) != 0) {
@@ -391,6 +406,11 @@ void ble_init(void) {
         NIMBLE_PROPERTY::NOTIFY
     );
 
+    voice_char = svc->createCharacteristic(
+        VOICE_CHAR_UUID,
+        NIMBLE_PROPERTY::NOTIFY
+    );
+
     svc->start();
     server->start();
     start_advertising();
@@ -428,17 +448,37 @@ const char* ble_get_mac_address(void) {
     return mac_str;
 }
 
+void ble_set_pairable(bool on) {
+    pairable = on;
+    suppress_advertising = !on;
+    if (!on) {
+        // Cut every live link too — a connected-but-unpairable link would
+        // still feed the old owner's data under the stale claim path.
+        if (server && state == BLE_STATE_CONNECTED) {
+            server->disconnect(server->getPeerInfo(0).getConnHandle());
+        }
+        Serial.println("BLE: pairable OFF — air-gapped (advertise + bonds rejected)");
+    } else {
+        Serial.println("BLE: pairable ON — advertising re-opened");
+        need_advertise = true;
+    }
+}
+
+bool ble_is_pairable(void) { return pairable; }
+
+// The unpair API: sever everything and CLOSE THE DOOR. Without the door,
+// an in-range Mac with a stale bond re-pairs and re-claims within two
+// seconds (race observed on-hardware, forensic log 2026-10-18). Re-open
+// the door by arming pairing mode (hold-PWR gesture or ble_set_pairable).
 void ble_clear_bonds(void) {
+    ble_set_pairable(false);
     NimBLEDevice::deleteAllBonds();
     clear_owner();  // release ownership so the board can be handed to another machine
-    Serial.println("BLE: bonds cleared");
+    Serial.println("BLE: bonds cleared (+ air-gapped until pairing re-armed)");
     if (state == BLE_STATE_CONNECTED) {
         server->disconnect(server->getPeerInfo(0).getConnHandle());
     }
-    // Flip immediately so the UI can show pairing mode without waiting for the
-    // async disconnect callback (that lag made hold-to-pair look like a no-op).
     state = BLE_STATE_DISCONNECTED;
-    need_advertise = true;
 }
 
 bool ble_has_bonds(void) {
@@ -481,6 +521,23 @@ void ble_request_refresh(void) {
         req_char->notify();
         Serial.println("BLE: refresh requested");
     }
+}
+
+// ---- Voice dictation transport ---------------------------------------------
+// Chunk stream to the host over the VOICE characteristic: binary notifies of
+// [seq:u8][flags:u8][len:u8][payload...] (payload ≤ 244 = one ADPCM block).
+// flags bit0 = end-of-utterance. The SENDER paces itself: one notify per call
+// (the voice app's tick cadence ~ ms) — notify() drops silently when the
+// connection event budget is exhausted, seq numbers let the daemon resync.
+void ble_voice_send_chunk(uint8_t seq, uint8_t flags, const uint8_t* data, uint8_t len) {
+    if (state != BLE_STATE_CONNECTED || !voice_char) return;
+    static uint8_t buf[3 + 244];
+    buf[0] = seq;
+    buf[1] = flags;
+    if (len > 251) return;   // notify payload ≤ (MTU-3)-3; MTU≥185 ⇒ ≤182: keep len ≤ 180
+    if (len) memcpy(buf + 3, data, len);
+    voice_char->setValue((uint8_t*)buf, (size_t)3 + len);
+    voice_char->notify();
 }
 
 void ble_bridge_send_cmd(const char* json) {

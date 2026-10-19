@@ -9,7 +9,11 @@
 
 // Render strip used when rotating in software. Sized to the largest LVGL
 // partial flush we ever do (LCD_WIDTH × BUF_LINES, set in main.cpp).
-#define ROT_BUF_LINES 40
+// Rotation buffer: sized for the LARGEST flush the display can receive.
+// main.cpp's full-screen render buffers (H5) deliver whole-screen flushes;
+// a 40-line buffer overflowed by 12x on every full-screen flush (heap
+// clobber = the flashing/rotated-garbage breakage).
+#define ROT_BUF_LINES LCD_HEIGHT
 static uint16_t* rot_buf = nullptr;
 
 static Arduino_DataBus* bus = nullptr;
@@ -31,7 +35,8 @@ void display_hal_begin(void) {
     gfx->fillScreen(0x0000);
     gfx->setBrightness(200);
 
-    // Allocate rotation strip (PSRAM). Sized to match main.cpp's BUF_LINES.
+    // Allocate rotation buffer (PSRAM). Sized to the largest flush the
+    // display delivers (see ROT_BUF_LINES above).
     rot_buf = (uint16_t*)heap_caps_malloc(LCD_WIDTH * ROT_BUF_LINES * 2, MALLOC_CAP_SPIRAM);
 }
 
@@ -99,6 +104,23 @@ void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h,
     rotate_strip(pixels, w, h, x, y, r, &dx, &dy, &dw, &dh);
     gfx->draw16bitRGBBitmap(dx, dy, rot_buf, dw, dh);
 }
+
+// Full-panel composite paint for the bypass swipe engine: pixels are the
+// FULL 480x480 display-facing frame (page bakes composited at swipe_offset).
+// One draw call, no rotate (orientation is baked into the composite below).
+void display_hal_paint_full(const uint16_t* pixels) {
+    if (!gfx) return;
+    uint8_t r = imu_hal_rotation_quadrant();
+    if (r == 0 || !rot_buf || !pixels) {
+        gfx->draw16bitRGBBitmap(0, 0, (uint16_t*)pixels, LCD_WIDTH, LCD_HEIGHT);
+        return;
+    }
+    // full-frame rotate into rot_buf (rot_buf = full-frame sized)
+    int32_t dx, dy, dw, dh;
+    rotate_strip(pixels, LCD_WIDTH, LCD_HEIGHT, 0, 0, r, &dx, &dy, &dw, &dh);
+    gfx->draw16bitRGBBitmap(dx, dy, rot_buf, dw, dh);
+}
+
 
 // On rotation change, force a full LVGL redraw at the new orientation.
 // Gravity Ball temporarily freezes imu_hal_rotation_quadrant(), so this stays

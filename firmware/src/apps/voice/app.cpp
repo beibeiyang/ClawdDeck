@@ -5,6 +5,7 @@
 #include "../../ble.h"
 #include "../../hal/input_hal.h"
 #include "../../hal/board_caps.h"
+#include "../../hal/audio_in_hal.h"
 #include <Arduino.h>
 
 LV_FONT_DECLARE(font_inter_20);
@@ -27,8 +28,10 @@ LV_FONT_DECLARE(font_phos_64);
 
 enum voice_state_t {
     VOICE_IDLE,
-    VOICE_RECORDING,
-    VOICE_PROCESSING,
+    VOICE_RECORDING,       // PTT path: HID Space held (drive the Mac's voice mode)
+    VOICE_PROCESSING,      // PTT path: waiting out the Mac's pipeline
+    VOICE_DICTATING,       // dictate path: mic → ADPCM → BLE → daemon whisper
+    VOICE_TRANSCRIBING,    // dictate path: EOU sent, waiting for 'vt' reply
 };
 
 static lv_obj_t* mic_btn    = nullptr;
@@ -41,13 +44,19 @@ static voice_state_t state = VOICE_IDLE;
 static bool          ptt_via_primary = false;
 static uint32_t      processing_at = 0;
 
+// Dictate stream state (mic tile hold): ADPCM blocks → ble_voice_send_chunk.
+static uint8_t  dict_seq        = 0;
+static bool     mic_capture_ok  = false;
+static uint32_t last_chunk_ms   = 0;
+static uint32_t transcribe_from = 0;
+
 static void set_state(voice_state_t next) {
     state = next;
     if (!state_lbl) return;
 
     switch (state) {
     case VOICE_IDLE:
-        lv_label_set_text(state_lbl, "Hold to talk");
+        lv_label_set_text(state_lbl, "Hold mic = dictate · hold BOOT = Mac voice");
         // The meter only reads while listening — idle hides it so the empty
         // track doesn't smudge behind the footnote text (their rows overlap;
         // while recording the footnote is emptied by ptt_start, so the bar
@@ -58,11 +67,20 @@ static void set_state(voice_state_t next) {
         }
         break;
     case VOICE_RECORDING:
-        lv_label_set_text(state_lbl, "Listening...");
+        lv_label_set_text(state_lbl, "Listening (Mac voice mode)...");
         if (level_bar) lv_obj_clear_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
         break;
     case VOICE_PROCESSING:
         lv_label_set_text(state_lbl, "Processing...");
+        if (level_bar) lv_obj_clear_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
+        processing_at = lv_tick_get();
+        break;
+    case VOICE_DICTATING:
+        lv_label_set_text(state_lbl, "Recording (dictate)...");
+        if (level_bar) lv_obj_clear_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
+        break;
+    case VOICE_TRANSCRIBING:
+        lv_label_set_text(state_lbl, "Transcribing on host...");
         if (level_bar) lv_obj_clear_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
         processing_at = lv_tick_get();
         break;
@@ -87,17 +105,45 @@ static void ptt_stop(void) {
     set_state(VOICE_PROCESSING);
 }
 
+// ---- Dictate-to-panel (mic tile hold): capture → chunk → daemon whisper ----
+static void dictate_start(void) {
+    if (state != VOICE_IDLE) return;
+    if (ble_get_state() != BLE_STATE_CONNECTED) {
+        if (transcript)
+            lv_label_set_text(transcript, "Connect to your Mac first.");
+        return;
+    }
+    mic_capture_ok = audio_in_hal_start();
+    if (!mic_capture_ok) {
+        if (transcript)
+            lv_label_set_text(transcript, "No microphone on this board.");
+        return;
+    }
+    dict_seq      = 0;
+    last_chunk_ms = lv_tick_get();
+    set_state(VOICE_DICTATING);
+    if (transcript) lv_label_set_text(transcript, "");
+}
+
+static void dictate_stop(void) {
+    if (state != VOICE_DICTATING) return;
+    audio_in_hal_stop();
+    // end-of-utterance marker: empty payload, EOU flag set
+    ble_voice_send_chunk(dict_seq++, 0x01, nullptr, 0);
+    set_state(VOICE_TRANSCRIBING);
+}
+
 // Hold-to-talk touch semantics: press-and-hold = Space down, release = Space
 // up (ptt_via_primary means the BOOT button owns the press — see
 // voice_on_button/voice_tick; that path must not double-handle releases).
-// The pressed LOOK lives purely in LV_STATE_PRESSED styles on the button.
+// The mic tile itself = DICTATE now (hold): PTT stays on BOOT per the design
+// (voice_on_button). The pressed LOOK lives in LV_STATE_PRESSED styles.
 static void mic_event(lv_event_t* e) {
     const lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_PRESSED) {
-        ptt_via_primary = false;
-        ptt_start();
+        dictate_start();
     } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
-        if (!ptt_via_primary) ptt_stop();
+        dictate_stop();
     }
 }
 
@@ -255,8 +301,9 @@ static void voice_create(lv_obj_t* root) {
 
     transcript = lv_label_create(root);
     lv_label_set_text(transcript,
-                      "BOOT also works as push-to-talk here.\n"
-                      "Whisper + reply display need the host bridge.");
+                      "Hold the mic tile — words land here and (daemon\n"
+                      "voice_inject=on) type into your focused terminal.\n"
+                      "BOOT = Mac voice-mode PTT.");
     lv_obj_set_style_text_font(transcript, &font_inter_16, 0);
     lv_obj_set_style_text_color(transcript, THEME_DIM, 0);
     lv_obj_set_style_text_opa(transcript, 200, 0);
@@ -269,6 +316,12 @@ static void voice_create(lv_obj_t* root) {
 }
 
 static void voice_destroy(void) {
+    // A dictation cut short by leaving the app: stop the mic + close the
+    // chunk stream so the daemon doesn't wait on an EOU that never comes.
+    if (state == VOICE_DICTATING) {
+        audio_in_hal_stop();
+        ble_voice_send_chunk(dict_seq++, 0x01, nullptr, 0);
+    }
     mic_btn = nullptr;
     mic_glyph = nullptr;
     state_lbl = nullptr;
@@ -286,16 +339,62 @@ static bool voice_on_button(app_btn_t btn) {
 }
 
 static void voice_tick(void) {
+    // PTT (BOOT-held) release detection — unchanged.
     if (ptt_via_primary && state == VOICE_RECORDING &&
         !input_hal_is_held(INPUT_BTN_PRIMARY)) {
         ptt_via_primary = false;
         ptt_stop();
     }
 
+    // REAL mic level now: the shared peak (audio_in_hal_tick feeds it from the
+    // I2S stream the dictation path reads — one consumer per loop, no steal).
     if (state == VOICE_RECORDING && level_bar) {
-        // Placeholder meter until audio_in HAL feeds real peaks.
         const int v = 25 + (int)(lv_tick_get() / 40 % 60);
-        lv_bar_set_value(level_bar, v, LV_ANIM_OFF);
+        (void)v;   // PTT path keeps the placeholder — the mic there is the Mac's
+        lv_bar_set_value(level_bar, 25 + (int)(lv_tick_get() / 40 % 60), LV_ANIM_OFF);
+    }
+    if (state == VOICE_DICTATING && level_bar) {
+        audio_in_hal_tick();
+        lv_bar_set_value(level_bar, audio_in_hal_peak(), LV_ANIM_OFF);
+    }
+
+    // Dictate chunk pump: ~2 ADPCM blocks (22 ms audio) per tick at the
+    // main-loop cadence, real-time-ish; notify drops when the link is busy
+    // are tolerated (seq resync on the daemon).
+    if (state == VOICE_DICTATING && mic_capture_ok) {
+        static uint8_t chunk[96];
+        const uint32_t now = lv_tick_get();
+        if (now - last_chunk_ms >= 11) {
+            const size_t n = audio_in_hal_read_adpcm(chunk, sizeof(chunk));
+            if (n) ble_voice_send_chunk(dict_seq++, 0x00, chunk, (uint8_t)(n > 250 ? 250 : n));
+            last_chunk_ms = now;
+        }
+    }
+
+    // Dictate reply: the 'vt' payload from the daemon (JSON bridge rx).
+    if (state == VOICE_TRANSCRIBING) {
+        const char* rx = ble_bridge_take_rx();
+        if (rx && strstr(rx, "\"t\":\"vt\"")) {
+            const char* tx = strstr(rx, "\"tx\":\"");
+            if (tx) {
+                tx += 5;
+                static char msg[480];
+                size_t o = 0;
+                while (*tx && *tx != '"' && o < sizeof(msg) - 1) {
+                    msg[o++] = *tx++;          // no escapes emitted by the daemon
+                }
+                msg[o] = '\0';
+                set_state(VOICE_IDLE);
+                if (transcript) lv_label_set_text(transcript, msg);
+            }
+        } else if (rx && strstr(rx, "\"t\":\"err\"")) {
+            set_state(VOICE_IDLE);
+            if (transcript) lv_label_set_text(transcript, "Host error — see daemon log.");
+        }
+        if (lv_tick_elaps(processing_at) > 15000) {  // 15s no reply = give up
+            set_state(VOICE_IDLE);
+            if (transcript) lv_label_set_text(transcript, "Transcription timed out.");
+        }
     }
 
     if (state == VOICE_PROCESSING && processing_at != 0 &&

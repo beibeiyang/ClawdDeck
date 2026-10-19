@@ -24,6 +24,17 @@ import httpx
 from bleak import BleakClient
 from bleak.exc import BleakError
 
+# Voice dictation: ADPCM decode + faster-whisper (both optional at import —
+# the daemon still runs rate-limit duty without them).
+try:
+    import numpy as np
+except ImportError:
+    np = None
+try:
+    from faster_whisper import WhisperModel
+except ImportError:
+    WhisperModel = None
+
 from claude_sessions import (
     find_session_cwd,
     list_recent_sessions,
@@ -39,6 +50,7 @@ RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
 REQ_CHAR_UUID = "4c41555a-4465-7669-6365-000000000004"
 HOST_RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000005"
 DEV_CMD_CHAR_UUID = "4c41555a-4465-7669-6365-000000000006"
+VOICE_CHAR_UUID = "4c41555a-4465-7669-6365-000000000007"
 
 POLL_INTERVAL = 60
 TICK = 5
@@ -156,6 +168,31 @@ def _read_token_keychain() -> str | None:
         log(f"Keychain access error: {e}")
         return None
     return _extract_access_token(_decode_keychain_blob(out.stdout))
+
+
+def read_voice_cfg() -> dict:
+    """Voice-dictation settings from the daemon config file.
+
+    Keys (booleans, default off/off):
+      voice_inject=on      type the transcript into the focused window
+      voice_autosubmit=on  press Enter after typing (per-agent Enter keys
+      are a follow-up; Enter is correct for shells + Claude Code and the
+      default stays review-before-send)
+    """
+    cfg = {"voice_inject": False, "voice_autosubmit": False}
+    try:
+        if CONFIG_FILE.exists():
+            for line in CONFIG_FILE.read_text().splitlines():
+                line = line.split("#", 1)[0].strip()
+                if "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                k = key.strip().lower()
+                if k in cfg:
+                    cfg[k] = val.strip().lower() in ("1", "on", "true", "yes")
+    except OSError:
+        pass
+    return cfg
 
 
 def read_config_dirs() -> list[Path]:
@@ -602,11 +639,102 @@ async def poll_active_payload(selector: PlanSelector = _SELECTOR) -> dict | None
     return payload
 
 
+# ---- Voice dictation helpers -----------------------------------------------
+SAMPLE_RATE_VOICE = 16000
+
+_IMA_STEP_TABLE = [
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31,
+    34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143,
+    157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544,
+    598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1410, 1552, 1707,
+    1878, 2066, 2272, 2499, 2749, 3024,
+] + [32767] * 25   # indexes 64..88 saturate (spec table = 89 entries)
+_IMA_ADJ = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8]
+
+
+def ima_adpcm_decode(blocks: bytes, rate: int) -> "np.ndarray | None":
+    """Decode a reassembled IMA-ADPCM chunk stream to int16 mono PCM.
+
+    Board format: back-to-back blocks of 4 + 88 bytes (= 92; the envelope's
+    len byte told the reassembler how many payload bytes each chunk carried).
+    Block = [pred:i16le][step_idx:u8][rsvd:u8][88 packed nibbles] — low
+    nibble first, 176 samples per block @ 16 kHz (11 ms).
+    """
+    if np is None:
+        return None
+    BLOCK = 4 + 88
+    out = np.empty((len(blocks) // BLOCK + 1) * 176, dtype=np.int16)
+    n_out = 0
+    pos = 0
+    while pos + 4 <= len(blocks):
+        # A trailing partial block (last chunk may be short) still decodes:
+        # packed = whatever follows the header, in nibbles.
+        header_end = pos + 4
+        # Detect the next header: fixed stride only holds if the stream is
+        # strictly 92-byte blocks — the envelope guaranteed each chunk was a
+        # whole block (voice app sends one block per chunk), so stride holds.
+        raw = blocks[pos] | (blocks[pos + 1] << 8)      # uint16 LE
+        pred = raw - 65536 if raw >= 0x8000 else raw    # int16 wrap (numpy 2 strictness)
+        step_idx = min(blocks[pos + 2], 88)
+        pos = header_end
+        block_payload_end = min(pos + 88, len(blocks))
+        while pos < block_payload_end:
+            b = blocks[pos]
+            for nib in (b & 0x0F, (b >> 4) & 0x0F):
+                if n_out >= len(out):
+                    return out[:n_out]
+                step = _IMA_STEP_TABLE[step_idx]
+                d = step >> 3
+                if nib & 4:
+                    d += step
+                if nib & 2:
+                    d += step >> 1
+                if nib & 1:
+                    d += step >> 2
+                if nib & 8:
+                    d = -d
+                pred += d
+                if pred > 32767:
+                    pred = 32767
+                elif pred < -32768:
+                    pred = -32768
+                out[n_out] = pred
+                n_out += 1
+                step_idx = max(0, min(88, step_idx + _IMA_ADJ[nib]))
+            pos += 1
+    return out[:n_out] if n_out else None
+
+
+def whisper_transcribe(pcm: "np.ndarray") -> "str | None":
+    """faster-whisper tiny.en on int16 mono 16k; returns text or None."""
+    if WhisperModel is None:
+        log("Voice: faster-whisper not installed (pip install faster-whisper)")
+        return None
+    global _whisper_model
+    try:
+        if _whisper_model is None:
+            log("Voice: loading faster-whisper tiny.en (first use)")
+            _whisper_model = WhisperModel("tiny.en", device="cpu", compute_type="int8")
+        segments, _info = _whisper_model.transcribe(
+            pcm.astype("float32") / 32768.0, language="en", beam_size=1)
+        text = " ".join(seg.text for seg in segments).strip()
+        return text or None
+    except Exception as e:
+        log(f"Voice: whisper failed: {e}")
+        return None
+
+
+_whisper_model = None
+
+
 class Session:
     def __init__(self, client: BleakClient) -> None:
         self.client = client
         self.refresh_requested = asyncio.Event()
         self._bridge_queue: asyncio.Queue[dict] = asyncio.Queue()
+        self._voice_queue: "asyncio.Queue[bytes]" = asyncio.Queue()
+        self._voice_buf = bytearray()
+        self._voice_last_seq: int | None = None
 
     def _on_refresh(self, _char, _data: bytearray) -> None:
         log("Refresh requested by device")
@@ -674,6 +802,79 @@ class Session:
         while not self._bridge_queue.empty():
             msg = await self._bridge_queue.get()
             await self._handle_bridge(msg)
+
+    # ---- Voice dictation (VOICE_CHAR binary chunk stream) -----------------
+    def _on_voice(self, _char, data: bytearray) -> None:
+        self._voice_queue.put_nowait(bytes(data))
+
+    async def setup_voice_subscription(self) -> None:
+        try:
+            await asyncio.wait_for(
+                self.client.start_notify(VOICE_CHAR_UUID, self._on_voice),
+                timeout=10,
+            )
+        except (BleakError, ValueError) as e:
+            log(f"Voice subscription unavailable: {e}")
+        except asyncio.TimeoutError:
+            log("Voice subscription timed out")
+
+    async def drain_voice(self) -> None:
+        # Chunk envelope: [seq:u8][flags:u8][len:u8][payload...]; flags bit0 =
+        # EOU. Reassemble in order (drops tolerated: a missing seq = gap →
+        # resync by continuing; the ADPCM blocks are self-contained with their
+        # own predictor header, so a gap = an audible blip, not a crash).
+        while not self._voice_queue.empty():
+            chunk = await self._voice_queue.get()
+            if len(chunk) < 4:
+                continue
+            seq, flags, ln = chunk[0], chunk[1], chunk[2]
+            payload = bytes(chunk[3:3 + min(ln, len(chunk) - 3)])
+            if self._voice_last_seq is not None and seq != (self._voice_last_seq + 1) & 0xFF:
+                log(f"Voice: seq gap {self._voice_last_seq} -> {seq} (dropped chunks tolerated)")
+            self._voice_last_seq = seq
+            self._voice_buf.extend(payload)
+            if flags & 0x01:   # end-of-utterance
+                await self._transcribe_voice()
+
+    async def _transcribe_voice(self) -> None:
+        audio_bytes = bytes(self._voice_buf)
+        self._voice_buf.clear()
+        self._voice_last_seq = None
+        if not audio_bytes:
+            return
+        pcm = ima_adpcm_decode(audio_bytes, SAMPLE_RATE_VOICE)  # int16 mono 16k
+        if pcm is None or len(pcm) == 0:
+            await self.write_bridge({"t": "err", "m": "Voice decode failed"})
+            return
+        dur = len(pcm) / SAMPLE_RATE_VOICE
+        log(f"Voice: {len(pcm)} samples ({dur:.1f}s) — transcribing")
+        text = whisper_transcribe(pcm)
+        if text is None:
+            await self.write_bridge({"t": "err", "m": "Whisper unavailable"})
+            return
+        await self.write_bridge({"t": "vt", "tx": text})
+
+        # Optional: the transcript becomes a prompt in the focused terminal
+        # (voice_inject=on in the daemon config; off = display-only).
+        cfg = read_voice_cfg()
+        if cfg.get("voice_inject"):
+            import asyncio as _aio
+            try:
+                import inject_macos
+                ok = await _aio.to_thread(
+                    inject_macos.type_prompt,
+                    text,
+                    submit=bool(cfg.get("voice_autosubmit")),
+                )
+                if not ok:
+                    await self.write_bridge(
+                        {"t": "err", "m": "Accessibility permission missing"})
+                else:
+                    log(f"Voice: injected into focused window "
+                        f"(autosubmit={cfg.get('voice_autosubmit')})")
+            except ImportError:
+                await self.write_bridge(
+                    {"t": "err", "m": "pyobjc not installed (inject off)"})
 
     async def _handle_bridge(self, msg: dict) -> None:
         cmd = msg.get("c")
@@ -843,12 +1044,14 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
     session = Session(client)
     await session.setup_refresh_subscription()
     await session.setup_bridge_subscription()
+    await session.setup_voice_subscription()
 
     last_poll = 0.0
     used_successfully = False
     try:
         while client.is_connected and not stop_event.is_set():
             await session.drain_bridge()
+            await session.drain_voice()
             now = time.time()
             elapsed = now - last_poll
             if session.refresh_requested.is_set() or elapsed >= POLL_INTERVAL:

@@ -42,8 +42,10 @@ static void set_bright_text(void) {
 }
 
 static void set_bond_text(void) {
-    if (bond_val)
-        lv_label_set_text(bond_val, ble_has_bonds() ? "Paired" : "Not paired");
+    if (!bond_val) return;
+    if (ble_has_bonds())          lv_label_set_text(bond_val, "Paired");
+    else if (!ble_is_pairable())  lv_label_set_text(bond_val, "Bonds cleared — hold PWR to pair");
+    else                          lv_label_set_text(bond_val, "Not paired");
 }
 
 static void set_unpair_text(void) {

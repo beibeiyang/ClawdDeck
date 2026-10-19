@@ -44,7 +44,12 @@ the panel, next to the sim reference:
 
 - **Display** — brightness (cycled live, NVS-backed).
 - **Connection** — device name, MAC, bond status; **Clear pairing** as the
-  destructive card (two-tap confirm).
+  destructive card (two-tap confirm). Clearing wipes the bonds **and
+  air-gaps the board** — it stops advertising and rejects every new pairing
+  until you deliberately re-arm it (**hold PWR 3 s → release**). This keeps
+  an in-range host with stale bond keys from silently re-pairing and
+  re-claiming the board the moment you clear it (observed within 1.5 s on
+  macOS; the air-gap is the fix).
 - **Device** — **storage %** (of the sketch partition), **memory %** (heap,
   with PSRAM boards showing free RAM), **battery %** (live, charging aware).
 - **Actions** — **Close background apps (n)** (torn down properly, count
@@ -87,7 +92,7 @@ the panel, next to the sim reference:
    (~1-3 min); reflashes are seconds. The board reboots itself when done.
 
 5. **First boot** — the splash plays the Clawd animations while the device
-   advertises over Bluetooth as **Clawdmeter**, waiting for a paired host.
+   advertises over Bluetooth as **ClawdDeck**, waiting for a paired host.
 
 6. **Pair + install the daemon** — follow your platform's section below
    (Linux, macOS or Windows): pair over Bluetooth, then run the matching
@@ -97,6 +102,66 @@ the panel, next to the sim reference:
    open its app, swipe up (or the home pill) to go home. In
    **Settings → Actions**, Power off / Restart ask for a second confirming
    tap.
+
+## Voice dictation — talk to your CLI agents
+
+Hold the **mic tile** in the Voice app, speak, release. The board captures
+16 kHz mono audio, encodes it as IMA-ADPCM, and streams it over BLE to the
+host daemon, which decodes it and transcribes with **faster-whisper
+(tiny.en)**. The transcript lands on the board's glass — and can become an
+actual **prompt in whatever CLI agent is focused** (Claude Code, Codex,
+Cursor, aider, a plain shell — it's just typing into the frontmost window).
+
+Two ways to talk, they coexist:
+
+| Input | Path | Effect |
+| --- | --- | --- |
+| **Mic tile (hold)** | board mic → BLE → daemon whisper | transcript on the panel; with injection on, typed into the focused terminal |
+| **BOOT button (hold)** | HID Space | the host's own voice-mode push-to-talk (unchanged) |
+
+The typed prompt is **not auto-submitted by default** — the cursor blinks at
+the end of your text and you hit Enter after a glance. Auto-submit is
+opt-in. A safety prefix (" x" typed then backspaced) guards the send:
+if Enter ever misfires mid-stream, the worst case is a stray `" x"` line,
+never your dictation.
+
+### Enable injection (macOS, once)
+
+```bash
+# in the daemon venv (install-mac.sh creates daemon/.venv):
+daemon/.venv/bin/pip install pyobjc-framework-Quartz \
+    pyobjc-framework-ApplicationServices faster-whisper numpy
+
+# grant Accessibility to the python binary that runs the daemon:
+#   System Settings → Privacy & Security → Accessibility → + →
+#   select the venv python (daemon/.venv/bin/python). The permission
+#   attaches to the interpreter binary, not the script.
+```
+
+Then opt in via the daemon config file
+(`~/.config/claude-usage-monitor/config`, same file that takes
+`config_dirs=`):
+
+```
+voice_inject=on
+# voice_autosubmit=on    # uncomment to let Enter fly (review-first default)
+```
+
+Restart the daemon (`launchctl unload`/`load` — commands above). Without
+injection enabled (or on other platforms) the Voice app remains
+display-only: the transcript still appears on the panel.
+
+### Voice transport details (for porters)
+
+- New GATT characteristic on the data service: **VOICE (0x…0007)**, notify.
+- Chunk envelope: `[seq:u8][flags:u8][len:u8][payload…]`, payload = one
+  IMA-ADPCM block (4-byte header `[pred:i16le][step_idx:u8][rsvd:u8]` +
+  88 packed nibble bytes = 176 samples ≈ 11 ms @ 16 kHz), sized so one
+  block + envelope fits the minimum-negotiated-MTU notify (185).
+- `flags` bit0 = end-of-utterance. Sequence gaps are tolerated (blocks are
+  self-contained; a gap = an audio blip, the daemon logs it).
+- Codec test suite: `daemon/tests/test_voice_code.py` (round-trip SNR,
+  envelope framing, partial-block decode).
 
 ## Screens
 
@@ -151,7 +216,7 @@ The board env name is required. Run `./flash-mac.sh` with no args to see the ava
 
 ### Pair the device
 
-After flashing, open **System Settings → Bluetooth** and click _Connect_ next to "Clawdmeter". The daemon only ever connects to the peripheral this Mac is paired/connected to — it never scans for a nearby device — so once it's connected here the daemon picks it up on its next poll (~60 s).
+After flashing, open **System Settings → Bluetooth** and click _Connect_ next to "ClawdDeck". The daemon only ever connects to the peripheral this Mac is paired/connected to — it never scans for a nearby device — so once it's connected here the daemon picks it up on its next poll (~60 s).
 
 ### Install the daemon
 
@@ -186,13 +251,13 @@ The board env name is required. Run `./flash.sh` with no args to see the availab
 
 ### Pair the device
 
-After flashing, the device advertises as "Clawdmeter". Pair it once:
+After flashing, the device advertises as "ClawdDeck". Pair it once:
 
 ```bash
 # Scan for the device
 bluetoothctl scan le
 
-# When "Clawdmeter" appears, pair and trust it
+# When "ClawdDeck" appears, pair and trust it
 bluetoothctl pair 02:55:AF:D3:22:71    # use your device's MAC
 bluetoothctl trust 02:55:AF:D3:22:71
 ```
@@ -233,7 +298,7 @@ Run `pio run -d firmware` with no env to see the available board envs.
 
 ### Pair the device
 
-The device is a bonded BLE HID keyboard, so pair it once: **Settings → Bluetooth & devices → Add device → Bluetooth**, then select "Clawdmeter". Pairing is **required** — it enables the physical buttons and keeps a persistent connection (the device keeps showing your last-synced usage even after the daemon quits). To undo, use **Remove device** (this disables the buttons).
+The device is a bonded BLE HID keyboard, so pair it once: **Settings → Bluetooth & devices → Add device → Bluetooth**, then select "ClawdDeck". Pairing is **required** — it enables the physical buttons and keeps a persistent connection (the device keeps showing your last-synced usage even after the daemon quits). To undo, use **Remove device** (this disables the buttons).
 
 ### Install the daemon (recommended)
 
@@ -310,6 +375,7 @@ The device advertises a custom GATT service alongside the standard HID keyboard 
 | RX Characteristic (write)  | `4c41555a-4465-7669-6365-000000000002` |
 | TX Characteristic (notify) | `4c41555a-4465-7669-6365-000000000003` |
 | **HID Service**            | `00001812-0000-1000-8000-00805f9b34fb` |
+| **Voice Chars (notify)**   | `4c41555a-4465-7669-6365-000000000005`–`007` (bridge host→device, bridge cmds device→host, voice chunks device→host) |
 
 JSON payload format (written to RX):
 
