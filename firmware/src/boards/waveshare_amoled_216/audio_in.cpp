@@ -29,9 +29,11 @@ static bool mic_hw_start(void) {
         chime_resume();
         return false;
     }
+    // MIC1/MIC2 are the pair on SDOUT1 — the stereo stream we read. At 0 dB
+    // speech landed at the noise floor (RMS ~5 of 32767).
     es7210_adc_set_gain(
         (es7210_input_mics_t)(ES7210_INPUT_MIC1 | ES7210_INPUT_MIC2),
-        (es7210_gain_value_t)GAIN_0DB);
+        (es7210_gain_value_t)GAIN_37_5DB);
     es7210_adc_set_gain(
         (es7210_input_mics_t)(ES7210_INPUT_MIC3 | ES7210_INPUT_MIC4),
         (es7210_gain_value_t)GAIN_37_5DB);
@@ -50,6 +52,7 @@ static bool mic_hw_start(void) {
         chime_resume();
         return false;
     }
+    mic_i2s->setTimeout(50);   // bound readBytes so the capture task stops promptly
     return true;
 }
 
@@ -63,6 +66,8 @@ static void mic_hw_stop(void) {
     chime_resume();
 }
 
+static void capture_task_stop(void);   // dictation capture task (below)
+
 bool audio_in_hal_start(void) {
     if (active) return true;
     if (!mic_hw_start()) return false;
@@ -73,6 +78,7 @@ bool audio_in_hal_start(void) {
 
 void audio_in_hal_stop(void) {
     if (!active) return;
+    capture_task_stop();
     mic_hw_stop();
     active = false;
     peak   = 0;
@@ -81,8 +87,11 @@ void audio_in_hal_stop(void) {
 bool audio_in_hal_active(void) { return active; }
 uint8_t audio_in_hal_peak(void) { return peak; }
 
+static TaskHandle_t capture_task = nullptr;
+
 void audio_in_hal_tick(void) {
-    if (!active || !mic_i2s) return;
+    // While dictating, the capture task owns the I2S stream (and the peak).
+    if (!active || !mic_i2s || capture_task) return;
     int16_t buf[256];
     const size_t got = mic_i2s->readBytes((char*)buf, sizeof(buf));
     if (got < sizeof(int16_t)) return;
@@ -143,8 +152,9 @@ static int32_t adpcm_pred  = 0;    // encoder predictor
 static int     adpcm_step  = 0;    // encoder step INDEX (0..88)
 static bool    adpcm_reset_pending = true;
 
-size_t audio_in_hal_read_adpcm(uint8_t* out, size_t cap) {
-    if (!active || !mic_i2s || !out || cap < 4 + (ADPCM_SAMPLES_PER_BLOCK + 1) / 2)
+// Encode one block from I2S into out (blocking on the mic). Task-side only.
+static size_t encode_block(uint8_t* out, size_t cap) {
+    if (!mic_i2s || cap < 4 + (ADPCM_SAMPLES_PER_BLOCK + 1) / 2)
         return 0;
 
     if (adpcm_reset_pending) {       // fresh utterance: predictors from zero
@@ -164,14 +174,21 @@ size_t audio_in_hal_read_adpcm(uint8_t* out, size_t cap) {
         for (size_t i = 0; i < frames && have < ADPCM_SAMPLES_PER_BLOCK; i++)
             mono[have++] = (int16_t)(((int32_t)st[i * 2] + st[i * 2 + 1]) / 2);
     }
-    if (have < ADPCM_SAMPLES_PER_BLOCK && have == 0) return 0;
+    if (have == 0) return 0;
+
+    int32_t maxv = 0;   // level meter: the task owns the stream, so it owns peak
+    for (size_t i = 0; i < have; i++) {
+        const int32_t v = abs((int32_t)mono[i]);
+        if (v > maxv) maxv = v;
+    }
+    const uint8_t instant = (uint8_t)(maxv > 8000 ? 100 : maxv * 100 / 8000);
+    peak = (uint8_t)((peak * 3 + instant) / 4);
 
     // Zero-pad a short final block only on stop — here a short read means the
     // mic is not keeping up; emit what we have (block size = have samples).
     const size_t samples = have;
-    const size_t nibbles = samples;
-    const size_t bytes   = 3 + (nibbles + 1) / 2;   // 3 hdr + packed nibbles
-    if (cap < bytes) return 0;
+    const size_t total   = 4 + (samples + 1) / 2;   // 4 hdr + packed nibbles
+    if (cap < total) return 0;
 
     // IMA header: predictor (int16 LE) + step index (u8) + reserved (u8)
     out[0] = (uint8_t)(adpcm_pred & 0xff);
@@ -204,13 +221,75 @@ size_t audio_in_hal_read_adpcm(uint8_t* out, size_t cap) {
         if (s_idx < 0)  s_idx = 0;
         if (s_idx > 88) s_idx = 88;
         // pack nibble (low nibble first — IMA order)
-        if (i & 1) out[3 + i / 2] |= (uint8_t)(nib << 4);
-        else       out[3 + i / 2]  = (uint8_t)nib;
+        if (i & 1) out[4 + i / 2] |= (uint8_t)(nib << 4);
+        else       out[4 + i / 2]  = (uint8_t)nib;
     }
     adpcm_pred = pred;
     adpcm_step = s_idx;
 
-    // Bytes = header (4, incl. reserved nibble-half for odd safety) + packed.
-    const size_t total = 4 + (samples + 1) / 2;
-    return (cap < total) ? 0 : total;
+    return total;
+}
+
+// ---- Dictation capture task ------------------------------------------------
+// The UI loop runs far slower than real time (~13 Hz with display flushes),
+// and the I2S DMA ring only holds ~90 ms — pulling one block per loop lost
+// most of the audio. A dedicated task keeps up with the mic and queues encoded
+// blocks; audio_in_hal_read_adpcm() pops them without blocking.
+#define ADPCM_BLOCK_BYTES (4 + ADPCM_SAMPLES_PER_BLOCK / 2)
+#define BLOCK_QUEUE_DEPTH 96   // ~1 s of audio of slack for UI / BLE stalls
+
+struct adpcm_block_t {
+    uint8_t len;
+    uint8_t data[ADPCM_BLOCK_BYTES];
+};
+
+static QueueHandle_t block_q     = nullptr;
+static volatile bool capture_run = false;
+
+static void capture_task_fn(void*) {
+    adpcm_block_t blk;
+    uint32_t dropped = 0;
+    while (capture_run) {
+        blk.len = (uint8_t)encode_block(blk.data, sizeof(blk.data));
+        if (blk.len && xQueueSend(block_q, &blk, 0) != pdTRUE) dropped++;
+    }
+    if (dropped)   // BLE couldn't keep up for long enough to fill the queue
+        Serial.printf("audio_in: block queue full, dropped %lu blocks\n",
+                      (unsigned long)dropped);
+    capture_task = nullptr;
+    vTaskDelete(nullptr);
+}
+
+static bool capture_task_start(void) {
+    if (!block_q) block_q = xQueueCreate(BLOCK_QUEUE_DEPTH, sizeof(adpcm_block_t));
+    if (!block_q) return false;
+    xQueueReset(block_q);
+    adpcm_reset_pending = true;
+    capture_run = true;
+    if (xTaskCreate(capture_task_fn, "mic_capture", 4096, nullptr, 3,
+                    &capture_task) != pdPASS) {
+        capture_run  = false;
+        capture_task = nullptr;
+        return false;
+    }
+    return true;
+}
+
+static void capture_task_stop(void) {
+    capture_run = false;
+    // readBytes is bounded (setTimeout), so the task exits within one block.
+    for (int i = 0; i < 40 && capture_task; i++) delay(5);
+}
+
+size_t audio_in_hal_read_adpcm(uint8_t* out, size_t cap) {
+    if (!out) return 0;
+    // Start capture on first read; after audio_in_hal_stop() keep handing
+    // out what's still queued so the caller can flush the utterance's tail.
+    if (active && mic_i2s && !capture_task && !capture_task_start()) return 0;
+    if (!block_q) return 0;
+    adpcm_block_t blk;
+    if (xQueueReceive(block_q, &blk, 0) != pdTRUE) return 0;
+    if (cap < blk.len) return 0;
+    memcpy(out, blk.data, blk.len);
+    return blk.len;
 }

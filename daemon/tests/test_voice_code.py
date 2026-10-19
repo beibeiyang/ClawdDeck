@@ -125,3 +125,42 @@ def test_trailing_partial_block_decodes():
     partial = stream[:-40]
     rec = ima_adpcm_decode(partial, rate)
     assert rec is not None and len(rec) > 0
+
+def test_header_only_eou_chunk_triggers_transcription():
+    """The board's EOU marker is a bare 3-byte header (empty payload) —
+    drain_voice must act on it, not discard it as too short."""
+    import asyncio
+    from claude_usage_daemon import Session
+
+    sess = Session(client=None)
+    calls = []
+
+    async def fake_transcribe():
+        calls.append(bytes(sess._voice_buf))
+
+    sess._transcribe_voice = fake_transcribe
+    block, _, _ = encode_block([0] * SAMPLES_PER_BLOCK)
+    sess._on_voice(None, bytearray([0, 0, len(block)]) + block)
+    sess._on_voice(None, bytearray([1, 0x01, 0]))   # EOU, as dictate_stop() sends it
+    asyncio.run(sess.drain_voice())
+    assert calls == [bytes(block)]
+
+
+def test_zero_len_byte_still_carries_payload():
+    """Firmware before the buf[2] fix left the envelope len byte at 0 on
+    every chunk; the notify length is authoritative, so audio must survive."""
+    import asyncio
+    from claude_usage_daemon import Session
+
+    sess = Session(client=None)
+    calls = []
+
+    async def fake_transcribe():
+        calls.append(bytes(sess._voice_buf))
+
+    sess._transcribe_voice = fake_transcribe
+    block, _, _ = encode_block([100] * SAMPLES_PER_BLOCK)
+    sess._on_voice(None, bytearray([0, 0, 0]) + block)   # len byte = 0, as observed
+    sess._on_voice(None, bytearray([1, 0x01, 0]))
+    asyncio.run(sess.drain_voice())
+    assert calls == [bytes(block)]

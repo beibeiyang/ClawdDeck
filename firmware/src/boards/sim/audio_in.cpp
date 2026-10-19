@@ -45,6 +45,10 @@ size_t audio_in_hal_read_stereo(int16_t* out, size_t frames) {
 // sim's payload exercises the transport + daemon plumbing, not the codec).
 size_t audio_in_hal_read_adpcm(uint8_t* out, size_t cap) {
     if (!active || !out || cap < 4) return 0;
+    static uint32_t next_due = 0;   // one block per 11 ms of wall time
+    const uint32_t now = lv_tick_get();
+    if ((int32_t)(now - next_due) < 0) return 0;
+    next_due = ((int32_t)(now - next_due) > 100) ? now + 11 : next_due + 11;
     // 120-sample block @ the sim phase: 60 bytes packed + 4-byte header
     const size_t n = 120;
     if (cap < 4 + n / 2) return 0;
@@ -60,5 +64,6 @@ size_t audio_in_hal_read_adpcm(uint8_t* out, size_t cap) {
         else       out[4 + i / 2]  = (uint8_t)nib;
     }
     phase = t0 + (float)n * 0.02f;
+    audio_in_hal_tick();   // the meter follows the stream (no separate reader)
     return 4 + n / 2;
 }

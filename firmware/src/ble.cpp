@@ -527,17 +527,21 @@ void ble_request_refresh(void) {
 // Chunk stream to the host over the VOICE characteristic: binary notifies of
 // [seq:u8][flags:u8][len:u8][payload...] (payload ≤ 244 = one ADPCM block).
 // flags bit0 = end-of-utterance. The SENDER paces itself: one notify per call
-// (the voice app's tick cadence ~ ms) — notify() drops silently when the
-// connection event budget is exhausted, seq numbers let the daemon resync.
-void ble_voice_send_chunk(uint8_t seq, uint8_t flags, const uint8_t* data, uint8_t len) {
-    if (state != BLE_STATE_CONNECTED || !voice_char) return;
+// — notify() fails (returns false) when the connection event budget is
+// exhausted; the caller retries the same block next tick.
+bool ble_voice_send_chunk(uint8_t seq, uint8_t flags, const uint8_t* data, uint8_t len) {
+    if (state != BLE_STATE_CONNECTED || !voice_char) return false;
     static uint8_t buf[3 + 244];
     buf[0] = seq;
     buf[1] = flags;
-    if (len > 251) return;   // notify payload ≤ (MTU-3)-3; MTU≥185 ⇒ ≤182: keep len ≤ 180
+    buf[2] = len;
+    if (len > 251) return false;   // notify payload ≤ (MTU-3)-3; MTU≥185 ⇒ ≤182: keep len ≤ 180
     if (len) memcpy(buf + 3, data, len);
-    voice_char->setValue((uint8_t*)buf, (size_t)3 + len);
-    voice_char->notify();
+    // notify(data, len) copies this chunk into its own mbuf now. The no-arg
+    // notify() only flags the characteristic as updated and the host later
+    // sends whatever value is current, so rapid chunks were duplicated or
+    // skipped — and it always reported success.
+    return voice_char->notify(buf, (size_t)3 + len);
 }
 
 void ble_bridge_send_cmd(const char* json) {
