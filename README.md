@@ -6,8 +6,9 @@ A desk-side ESP32 command deck: a pocket dashboard that keeps an eye on
 Claude Code usage — and runs a full Apple-grade app suite on its
 480×480 square AMOLED.
 
-ClawdDeck grew out of **Clawdmeter** — the Claude Code usage meter that is
-still the heart of the deck (its meter app is the launcher's first tile).
+ClawdDeck grew out of **[Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter)** —
+the Claude Code usage meter that is still the heart of the deck (its meter app
+is the launcher's first tile).
 ClawdDeck = Clawdmeter + the phone-style launcher it deserved.
 
 <a href="https://buymeacoffee.com/growingcatb"><img src="assets/readme/bmc-button.png" width="190" alt="Buy Me A Coffee"></a>
