@@ -117,6 +117,8 @@ const char* ble_get_data(void) {
 }
 void ble_send_ack(void)  {}
 void ble_send_nack(void) { printf("[sim] payload NACKed — check the scenario JSON\n"); }
+void ble_set_pairable(bool on) { (void)on; }
+bool ble_is_pairable(void) { return true; }
 void ble_request_refresh(void) {}
 void ble_set_battery_level(int pct) { (void)pct; }
 

@@ -14,6 +14,8 @@ ble_state_t ble_get_state(void);
 const char* ble_get_device_name(void);
 const char* ble_get_mac_address(void);
 void ble_clear_bonds(void);
+void ble_set_pairable(bool on);   // air-gap gate: false rejects all new bonds + stops advertising
+bool ble_is_pairable(void);
 bool ble_has_bonds(void);
 bool ble_has_data(void);
 const char* ble_get_data(void);

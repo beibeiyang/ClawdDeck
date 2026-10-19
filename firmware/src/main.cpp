@@ -219,6 +219,10 @@ static void check_serial_cmd() {
             else if (strcmp(cmd_buf, "home") == 0)  shell_go_home();
             else if (strncmp(cmd_buf, "open ", 5) == 0) shell_open_id(cmd_buf + 5);
             else if (strcmp(cmd_buf, "bench") == 0) launcher_bench_start();
+            else if (strcmp(cmd_buf, "unpair") == 0) {
+                Serial.println("serial unpair: clearing BLE bonds + owner");
+                ble_clear_bonds();
+            }
             else if (strcmp(cmd_buf, "flushclr") == 0) {
                 extern volatile uint32_t bench_flush_px, bench_flush_calls;
                 bench_flush_px = 0; bench_flush_calls = 0;
@@ -430,6 +434,7 @@ static void pair_tick(void) {
         if (pair_state == PAIR_ARMED) {
             Serial.println("Pair: released in window — clearing bonds, advertising");
             ble_clear_bonds();
+            ble_set_pairable(true);   // deliberate gesture = open the door
             sound_hal_play_reset();   // audible ack — the screen may already show
                                       // the pairing hint, so there's little to see
             idle_set_awake_brightness(brightness_get()); // undo any rotation blank
