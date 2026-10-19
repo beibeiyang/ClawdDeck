@@ -6,6 +6,7 @@
 #include "../../hal/input_hal.h"
 #include "../../hal/board_caps.h"
 #include "../../hal/audio_in_hal.h"
+#include "voice_layout.h"
 #include <Arduino.h>
 
 LV_FONT_DECLARE(font_inter_20);
@@ -109,31 +110,39 @@ static void set_state(voice_state_t next) {
 
     switch (state) {
     case VOICE_IDLE:
-        lv_label_set_text(state_lbl, "Hold mic = dictate · hold BOOT = Mac voice");
-        // The meter only reads while listening — idle hides it so the empty
-        // track doesn't smudge behind the footnote text (their rows overlap;
-        // while recording the footnote is emptied by ptt_start, so the bar
-        // owns its zone).
+        lv_label_set_text(state_lbl, "READY");
         if (level_bar) {
             lv_bar_set_value(level_bar, 0, LV_ANIM_OFF);
             lv_obj_add_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
         }
+        if (mic_btn) {
+            lv_obj_set_style_bg_color(mic_btn, lv_color_hex(0x202326), 0);
+            lv_obj_set_style_border_color(mic_btn, lv_color_hex(0x4a4f54), 0);
+        }
         break;
     case VOICE_RECORDING:
-        lv_label_set_text(state_lbl, "Listening (Mac voice mode)...");
+        lv_label_set_text(state_lbl, "MAC VOICE");
         if (level_bar) lv_obj_clear_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
+        if (mic_btn) {
+            lv_obj_set_style_bg_color(mic_btn, THEME_ACCENT, 0);
+            lv_obj_set_style_border_color(mic_btn, lv_color_hex(0xf2a184), 0);
+        }
         break;
     case VOICE_PROCESSING:
-        lv_label_set_text(state_lbl, "Processing...");
+        lv_label_set_text(state_lbl, "PROCESSING");
         if (level_bar) lv_obj_clear_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
         processing_at = lv_tick_get();
         break;
     case VOICE_DICTATING:
-        lv_label_set_text(state_lbl, "Recording (dictate)...");
+        lv_label_set_text(state_lbl, "LISTENING");
         if (level_bar) lv_obj_clear_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
+        if (mic_btn) {
+            lv_obj_set_style_bg_color(mic_btn, THEME_ACCENT, 0);
+            lv_obj_set_style_border_color(mic_btn, lv_color_hex(0xf2a184), 0);
+        }
         break;
     case VOICE_TRANSCRIBING:
-        lv_label_set_text(state_lbl, "Transcribing on host...");
+        lv_label_set_text(state_lbl, "TRANSCRIBING");
         if (level_bar) lv_obj_clear_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
         processing_at = lv_tick_get();
         break;
@@ -219,8 +228,10 @@ static void mic_event(lv_event_t* e) {
 
 static void voice_create(lv_obj_t* root) {
     const int W = board_caps().width;
+    const int H = board_caps().height;
     const bool compact = (W < 400);
-    const int btn = compact ? 150 : 240;
+    const VoiceLayout layout = voice_layout(W, H, STATUSBAR_H, VOICE_FOOT_H);
+    const int btn = layout.mic.w;
 
     // ---- Quiet light field (the glass needs light to bend) -----------------
     // App backdrop: the launcher duotone's own slice (warm crest → navy
@@ -231,6 +242,12 @@ static void voice_create(lv_obj_t* root) {
     lv_obj_set_style_bg_grad_dir(root, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_main_stop(root, 0, 0);
     lv_obj_set_style_bg_grad_stop(root, 230, 0);
+
+    // Precision Black field: solid RGB565-safe background, with no broad
+    // luma ramp behind the controls or copy.
+    lv_obj_set_style_bg_color(root, lv_color_hex(0x050607), 0);
+    lv_obj_set_style_bg_grad_dir(root, LV_GRAD_DIR_NONE, 0);
+    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
 
     // The launcher's luminous light dome (soon.cpp recipe verbatim): a giant
     // cream ellipse, top edge off-panel, lower rim arcing across the field —
@@ -292,6 +309,17 @@ static void voice_create(lv_obj_t* root) {
     lv_obj_set_style_bg_main_stop(mic_btn, 0, 0);
     lv_obj_set_style_bg_grad_stop(mic_btn, 240, 0);
 
+    // The button uses solid graphite in its resting state. State changes add
+    // the single warm listening accent without moving any content.
+    lv_obj_set_style_bg_color(mic_btn, lv_color_hex(0x202326), 0);
+    lv_obj_set_style_bg_grad_dir(mic_btn, LV_GRAD_DIR_NONE, 0);
+    lv_obj_set_style_bg_grad_opa(mic_btn, 0, 0);
+    lv_obj_set_style_bg_opa(mic_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(mic_btn, lv_color_hex(0x4a4f54), 0);
+    lv_obj_set_style_border_opa(mic_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(mic_btn, 1, 0);
+    lv_obj_set_style_shadow_width(mic_btn, 0, 0);
+
     // Soft puddle shadow + cream rim + dark outer contour (launcher-tuned).
     lv_obj_set_style_shadow_color(mic_btn, GLASS_SHADOW, 0);
     lv_obj_set_style_shadow_width(mic_btn, 14, 0);
@@ -347,6 +375,7 @@ static void voice_create(lv_obj_t* root) {
     lv_obj_set_style_text_font(mic_glyph,
                                compact ? &font_phos_28 : &font_phos_64, 0);
     lv_obj_set_style_text_color(mic_glyph, THEME_INK, 0);
+    lv_obj_set_style_text_color(mic_glyph, lv_color_hex(0xfaf9f5), 0);
     lv_obj_set_style_text_opa(mic_glyph, 235, 0);
     lv_obj_set_style_text_letter_space(mic_glyph, 0, 0);
     lv_obj_align(mic_glyph, LV_ALIGN_CENTER, 0, -2);
@@ -359,6 +388,18 @@ static void voice_create(lv_obj_t* root) {
     lv_obj_set_style_text_align(state_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align_to(state_lbl, mic_btn, LV_ALIGN_OUT_BOTTOM_MID, 0, 18);
 
+    // Geometry is computed once from the display and home-pill keep-out.
+    // Later state text can wrap or clip only inside its own fixed zone.
+    lv_obj_set_size(mic_btn, layout.mic.w, layout.mic.h);
+    lv_obj_set_align(mic_btn, LV_ALIGN_TOP_LEFT);
+    lv_obj_set_pos(mic_btn, layout.mic.x, layout.mic.y);
+    lv_obj_set_size(state_lbl, layout.state.w, layout.state.h);
+    lv_obj_set_align(state_lbl, LV_ALIGN_TOP_LEFT);
+    lv_obj_set_pos(state_lbl, layout.state.x, layout.state.y);
+    lv_obj_set_style_text_font(state_lbl, compact ? &font_inter_16 : &font_inter_20, 0);
+    lv_obj_set_style_text_letter_space(state_lbl, 1, 0);
+    lv_label_set_long_mode(state_lbl, LV_LABEL_LONG_CLIP);
+
     level_bar = lv_bar_create(root);
     lv_obj_set_width(level_bar, btn);
     lv_obj_set_height(level_bar, 6);
@@ -368,19 +409,34 @@ static void voice_create(lv_obj_t* root) {
     lv_obj_set_style_radius(level_bar, 3, LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(level_bar, THEME_GREEN, LV_PART_INDICATOR);
     lv_obj_align_to(level_bar, state_lbl, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
+    lv_obj_set_size(level_bar, layout.meter.w, layout.meter.h);
+    lv_obj_set_align(level_bar, LV_ALIGN_TOP_LEFT);
+    lv_obj_set_pos(level_bar, layout.meter.x, layout.meter.y);
+    lv_obj_set_style_bg_color(level_bar, lv_color_hex(0x292d31), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(level_bar, THEME_ACCENT, LV_PART_INDICATOR);
 
     transcript = lv_label_create(root);
     lv_label_set_text(transcript,
-                      "Hold the mic tile — words land here and (daemon\n"
-                      "voice_inject=on) type into your focused terminal.\n"
-                      "BOOT = Mac voice-mode PTT.");
-    lv_obj_set_style_text_font(transcript, &font_inter_16, 0);
+                      "Hold the mic to dictate.\n"
+                      "Hold BOOT for Mac voice mode.");
+    lv_obj_set_style_text_font(transcript,
+                               compact ? &font_inter_14 : &font_inter_16, 0);
     lv_obj_set_style_text_color(transcript, THEME_DIM, 0);
     lv_obj_set_style_text_opa(transcript, 200, 0);
     lv_obj_set_width(transcript, W - (compact ? 32 : 48));
+    lv_obj_set_size(transcript, layout.transcript.w, layout.transcript.h);
     lv_label_set_long_mode(transcript, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(transcript, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(transcript, LV_ALIGN_BOTTOM_MID, 0, -(VOICE_FOOT_H + 12));
+    lv_obj_set_align(transcript, LV_ALIGN_TOP_LEFT);
+    lv_obj_set_pos(transcript, layout.transcript.x, layout.transcript.y);
+    lv_label_set_long_mode(transcript, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_line_space(transcript, compact ? 1 : 2, 0);
+
+    // Keep the old decorative dome out of the rendered screen. It remains in
+    // the construction order above only so this UI can reuse its stable child
+    // ordering while the rest of Voice is replaced incrementally.
+    lv_obj_add_flag(dome, LV_OBJ_FLAG_HIDDEN);
 
     set_state(VOICE_IDLE);
 }
