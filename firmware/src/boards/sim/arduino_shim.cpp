@@ -69,11 +69,11 @@ SimSerial Serial;
 
 // ---- Preferences: tiny in-memory key/value store ----
 #define PREF_SLOTS 16
-static struct { char key[16]; uint8_t val; bool used; } store[PREF_SLOTS];
+static struct { char key[16]; int32_t val; bool used; } store[PREF_SLOTS];
 
 uint8_t Preferences::getUChar(const char* key, uint8_t def) {
     for (auto& s : store)
-        if (s.used && strcmp(s.key, key) == 0) return s.val;
+        if (s.used && strcmp(s.key, key) == 0) return (uint8_t)s.val;
     return def;
 }
 size_t Preferences::putUChar(const char* key, uint8_t value) {
@@ -85,6 +85,29 @@ size_t Preferences::putUChar(const char* key, uint8_t value) {
             strncpy(s.key, key, sizeof(s.key) - 1);
             s.val = value;
             return 1;
+        }
+    return 0;
+}
+
+int32_t Preferences::getInt(const char* key, int32_t def) {
+    for (auto& s : store)
+        if (s.used && strcmp(s.key, key) == 0) return s.val;
+    return def;
+}
+
+size_t Preferences::putInt(const char* key, int32_t value) {
+    for (auto& s : store)
+        if (s.used && strcmp(s.key, key) == 0) {
+            s.val = value;
+            return sizeof(value);
+        }
+    for (auto& s : store)
+        if (!s.used) {
+            s.used = true;
+            strncpy(s.key, key, sizeof(s.key) - 1);
+            s.key[sizeof(s.key) - 1] = '\0';
+            s.val = value;
+            return sizeof(value);
         }
     return 0;
 }
