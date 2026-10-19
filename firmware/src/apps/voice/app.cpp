@@ -116,7 +116,9 @@ static void set_state(voice_state_t next) {
         break;
     case VOICE_RECORDING:
         lv_label_set_text(state_lbl, "MAC VOICE");
-        if (level_bar) lv_obj_clear_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
+        // The board is only sending HID Space here; it is not measuring the
+        // Mac microphone, so do not imply that this is a live input meter.
+        if (level_bar) lv_obj_add_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
         if (mic_btn) {
             lv_obj_set_style_bg_color(mic_btn, THEME_ACCENT, 0);
             lv_obj_set_style_border_color(mic_btn, lv_color_hex(0xf2a184), 0);
@@ -124,7 +126,7 @@ static void set_state(voice_state_t next) {
         break;
     case VOICE_PROCESSING:
         lv_label_set_text(state_lbl, "PROCESSING");
-        if (level_bar) lv_obj_clear_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
+        if (level_bar) lv_obj_add_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
         processing_at = lv_tick_get();
         break;
     case VOICE_DICTATING:
@@ -137,7 +139,7 @@ static void set_state(voice_state_t next) {
         break;
     case VOICE_TRANSCRIBING:
         lv_label_set_text(state_lbl, "TRANSCRIBING");
-        if (level_bar) lv_obj_clear_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
+        if (level_bar) lv_obj_add_flag(level_bar, LV_OBJ_FLAG_HIDDEN);
         processing_at = lv_tick_get();
         break;
     }
@@ -360,13 +362,7 @@ static void voice_tick(void) {
         ptt_stop();
     }
 
-    // Level meter: PTT shows a placeholder (the mic is the Mac's); dictation
-    // shows the real peak, fed by the board's capture path.
-    if (state == VOICE_RECORDING && level_bar) {
-        const int v = 25 + (int)(lv_tick_get() / 40 % 60);
-        (void)v;   // PTT path keeps the placeholder — the mic there is the Mac's
-        lv_bar_set_value(level_bar, 25 + (int)(lv_tick_get() / 40 % 60), LV_ANIM_OFF);
-    }
+    // The local meter is only shown during actual on-device dictation.
     if (state == VOICE_DICTATING && level_bar) {
         lv_bar_set_value(level_bar, audio_in_hal_peak(), LV_ANIM_OFF);
     }

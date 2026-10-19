@@ -65,6 +65,19 @@ static bool persist_gravity_bias(float bias_x, float bias_y) {
     return true;
 }
 
+#ifdef IMU_HAL_TESTING
+// Clear only volatile HAL state so the host test can model a reboot while
+// leaving the fake Preferences store intact. This symbol is absent on device.
+void imu_hal_gravity_test_reset(void) {
+    g_bias_x = 0.0f;
+    g_bias_y = 0.0f;
+    g_has_bias = false;
+    g_loaded = false;
+    g_bias_slot = -1;
+    imu_hal_gravity_cal_cancel();
+}
+#endif
+
 void imu_hal_gravity_cal_begin(void) {
     load_gravity_bias();
     level_calibration_begin(&g_cal);
