@@ -301,8 +301,9 @@ static void voice_create(lv_obj_t* root) {
 
     transcript = lv_label_create(root);
     lv_label_set_text(transcript,
-                      "Hold the mic tile: dictate — words land here via\n"
-                      "the host (Whisper). BOOT = Mac voice-mode PTT.");
+                      "Hold the mic tile — words land here and (daemon\n"
+                      "voice_inject=on) type into your focused terminal.\n"
+                      "BOOT = Mac voice-mode PTT.");
     lv_obj_set_style_text_font(transcript, &font_inter_16, 0);
     lv_obj_set_style_text_color(transcript, THEME_DIM, 0);
     lv_obj_set_style_text_opa(transcript, 200, 0);

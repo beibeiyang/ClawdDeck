@@ -170,6 +170,31 @@ def _read_token_keychain() -> str | None:
     return _extract_access_token(_decode_keychain_blob(out.stdout))
 
 
+def read_voice_cfg() -> dict:
+    """Voice-dictation settings from the daemon config file.
+
+    Keys (booleans, default off/off):
+      voice_inject=on      type the transcript into the focused window
+      voice_autosubmit=on  press Enter after typing (per-agent Enter keys
+      are a follow-up; Enter is correct for shells + Claude Code and the
+      default stays review-before-send)
+    """
+    cfg = {"voice_inject": False, "voice_autosubmit": False}
+    try:
+        if CONFIG_FILE.exists():
+            for line in CONFIG_FILE.read_text().splitlines():
+                line = line.split("#", 1)[0].strip()
+                if "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                k = key.strip().lower()
+                if k in cfg:
+                    cfg[k] = val.strip().lower() in ("1", "on", "true", "yes")
+    except OSError:
+        pass
+    return cfg
+
+
 def read_config_dirs() -> list[Path]:
     """Claude config dirs to poll, from the `config_dirs` option (comma list).
 
@@ -828,6 +853,28 @@ class Session:
             await self.write_bridge({"t": "err", "m": "Whisper unavailable"})
             return
         await self.write_bridge({"t": "vt", "tx": text})
+
+        # Optional: the transcript becomes a prompt in the focused terminal
+        # (voice_inject=on in the daemon config; off = display-only).
+        cfg = read_voice_cfg()
+        if cfg.get("voice_inject"):
+            import asyncio as _aio
+            try:
+                import inject_macos
+                ok = await _aio.to_thread(
+                    inject_macos.type_prompt,
+                    text,
+                    submit=bool(cfg.get("voice_autosubmit")),
+                )
+                if not ok:
+                    await self.write_bridge(
+                        {"t": "err", "m": "Accessibility permission missing"})
+                else:
+                    log(f"Voice: injected into focused window "
+                        f"(autosubmit={cfg.get('voice_autosubmit')})")
+            except ImportError:
+                await self.write_bridge(
+                    {"t": "err", "m": "pyobjc not installed (inject off)"})
 
     async def _handle_bridge(self, msg: dict) -> None:
         cmd = msg.get("c")
