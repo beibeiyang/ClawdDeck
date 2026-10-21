@@ -239,3 +239,72 @@ def test_damaged_transport_is_rejected_not_transcribed(monkeypatch, bad_flags):
     assert not called
     assert replies[-1]["t"] == "err"
     assert "dropped" in replies[-1]["m"]
+
+
+def test_restarted_stream_discards_stale_partial(monkeypatch):
+    """A lost EOU leaves a partial utterance behind; the device's next stream
+    restarts at seq 0. That must not be reported as packet loss, and the stale
+    blocks must not be spliced into the new utterance."""
+    import asyncio
+    import claude_usage_daemon as daemon
+
+    sess = daemon.Session(client=None)
+    typed = []
+    replies = []
+    monkeypatch.setattr(daemon, "whisper_transcribe",
+                        lambda pcm: typed.append(len(pcm)) or "ok")
+    monkeypatch.setattr(daemon, "read_voice_cfg", lambda: {})
+
+    async def fake_write(payload):
+        replies.append(payload)
+        return True
+
+    sess.write_bridge = fake_write
+    block, _, _ = encode_block([1000] * 350)
+    for seq in range(7):          # stale stream 0..6, EOU lost
+        sess._on_voice(None, bytearray([seq, 0, len(block)]) + block)
+    for seq in range(20):         # fresh stream restarts at 0 (0.44 s)
+        sess._on_voice(None, bytearray([seq, 0, len(block)]) + block)
+    sess._on_voice(None, bytearray([20, 0x01, 0]))
+    asyncio.run(sess.drain_voice())
+
+    assert typed == [20 * 350]    # only the fresh utterance
+    assert {"t": "vt", "tx": "ok"} in replies
+    assert not any(r.get("t") == "err" for r in replies)
+
+
+def test_seq_wrap_is_not_a_restart(monkeypatch):
+    import asyncio
+    import claude_usage_daemon as daemon
+
+    sess = daemon.Session(client=None)
+    typed = []
+    monkeypatch.setattr(daemon, "whisper_transcribe",
+                        lambda pcm: typed.append(len(pcm)) or "ok")
+
+    async def fake_write(payload):
+        return True
+
+    sess.write_bridge = fake_write
+    block, _, _ = encode_block([1000] * 350)
+    for i in range(300):          # crosses 255 -> 0
+        sess._on_voice(None, bytearray([i & 0xFF, 0, len(block)]) + block)
+    sess._on_voice(None, bytearray([300 & 0xFF, 0x01, 0]))
+    asyncio.run(sess.drain_voice())
+
+    assert typed == [300 * 350]
+
+
+def test_voice_chunk_wakes_main_loop():
+    import asyncio
+    import claude_usage_daemon as daemon
+
+    async def run():
+        sess = daemon.Session(client=None)
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.05, sess._on_voice, None, bytearray([0, 0, 0]))
+        t0 = loop.time()
+        await sess.wait_for_wake(5)
+        return loop.time() - t0
+
+    assert asyncio.run(run()) < 1
