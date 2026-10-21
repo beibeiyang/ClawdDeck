@@ -134,11 +134,30 @@ never your dictation.
 daemon/.venv/bin/pip install pyobjc-framework-Quartz \
     pyobjc-framework-ApplicationServices faster-whisper numpy
 
-# grant Accessibility to the python binary that runs the daemon:
-#   System Settings → Privacy & Security → Accessibility → + →
-#   select the venv python (daemon/.venv/bin/python). The permission
-#   attaches to the interpreter binary, not the script.
 ```
+
+**Grant Accessibility to the daemon's Python.app (required on macOS).**
+Without it the transcript still appears on the panel, but typing into the
+terminal fails and the board shows `Accessibility permission missing`. The
+daemon runs under launchd as your Python's `Python.app` — *not* the venv
+`python` symlink, and not your terminal — so that app is what needs the grant:
+
+```bash
+# Reveal the right Python.app in Finder and open the Accessibility pane:
+open -R "$(daemon/.venv/bin/python -c 'import sys;print(sys.base_prefix)')/Resources/Python.app"
+open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+```
+
+1. Drag that `Python.app` into **System Settings → Privacy & Security →
+   Accessibility** (or click **+**, then ⌘⇧G and paste its path).
+2. Switch its toggle **on**. If a stale "Python" entry exists, remove it with
+   **−** and add it again.
+3. Restart the daemon so it picks up the permission:
+   `launchctl kickstart -k gui/$(id -u)/com.user.claude-usage-daemon`
+
+A successful injection logs `Voice: injected into focused window`. The grant
+is tied to the binary, so after `brew upgrade python@3.13` (or any change that
+replaces `Python.app`) repeat these steps.
 
 Then opt in via the daemon config file
 (`~/.config/claude-usage-monitor/config`, same file that takes
@@ -149,7 +168,7 @@ voice_inject=on
 # voice_autosubmit=on    # uncomment to let Enter fly (review-first default)
 ```
 
-Restart the daemon (`launchctl unload`/`load` — commands above). Without
+Restart the daemon (step 3 above, or `launchctl unload`/`load` — commands in the install section). Without
 injection enabled (or on other platforms) the Voice app remains
 display-only: the transcript still appears on the panel.
 
