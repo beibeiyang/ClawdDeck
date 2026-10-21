@@ -736,6 +736,22 @@ class Session:
         self._voice_rate = SAMPLE_RATE_VOICE
         self._voice_seq_gaps = 0
         self._voice_overrun = False
+        self.voice_ready = asyncio.Event()
+
+    async def wait_for_wake(self, timeout: float) -> None:
+        # Sleep until a refresh request, incoming voice audio, or the timeout.
+        # Waiting on refresh alone left voice chunks undrained for up to TICK.
+        self.voice_ready.clear()
+        if not self._voice_queue.empty():
+            return
+        waiters = [asyncio.ensure_future(self.refresh_requested.wait()),
+                   asyncio.ensure_future(self.voice_ready.wait())]
+        try:
+            await asyncio.wait(waiters, timeout=timeout,
+                               return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for w in waiters:
+                w.cancel()
 
     def _on_refresh(self, _char, _data: bytearray) -> None:
         log("Refresh requested by device")
@@ -807,6 +823,7 @@ class Session:
     # ---- Voice dictation (VOICE_CHAR binary chunk stream) -----------------
     def _on_voice(self, _char, data: bytearray) -> None:
         self._voice_queue.put_nowait(bytes(data))
+        self.voice_ready.set()   # wake the main loop; don't wait out TICK
 
     async def setup_voice_subscription(self) -> None:
         try:
@@ -831,9 +848,18 @@ class Session:
             # The notify is already length-delimited; the envelope's len byte
             # is redundant (and was left 0 by older firmware), so ignore it.
             payload = bytes(chunk[3:])
-            if self._voice_last_seq is not None and seq != (self._voice_last_seq + 1) & 0xFF:
+            last = self._voice_last_seq
+            if last is not None and seq == 0 and last != 0xFF:
+                # The device restarts every utterance at seq 0 (not a wrap), so
+                # the previous stream's EOU never arrived. Drop its stale
+                # partial audio instead of splicing it onto this utterance and
+                # reporting the restart as packet loss.
+                log(f"Voice: stream restarted ({last} -> 0); "
+                    f"discarding {len(self._voice_blocks)} stale blocks")
+                self._reset_voice_stream()
+            elif last is not None and seq != (last + 1) & 0xFF:
                 self._voice_seq_gaps += 1
-                log(f"Voice: seq gap {self._voice_last_seq} -> {seq}")
+                log(f"Voice: seq gap {last} -> {seq}")
             self._voice_last_seq = seq
             if payload:
                 packet_rate = 8000 if flags & 0x02 else SAMPLE_RATE_VOICE
@@ -848,18 +874,21 @@ class Session:
             if flags & 0x01:   # end-of-utterance
                 await self._transcribe_voice()
 
-    async def _transcribe_voice(self) -> None:
-        audio_bytes = bytes(self._voice_buf)
-        blocks = self._voice_blocks[:]
-        rate = self._voice_rate
-        seq_gaps = self._voice_seq_gaps
-        overrun = self._voice_overrun
+    def _reset_voice_stream(self) -> None:
         self._voice_buf.clear()
         self._voice_blocks.clear()
         self._voice_last_seq = None
         self._voice_rate = SAMPLE_RATE_VOICE
         self._voice_seq_gaps = 0
         self._voice_overrun = False
+
+    async def _transcribe_voice(self) -> None:
+        audio_bytes = bytes(self._voice_buf)
+        blocks = self._voice_blocks[:]
+        rate = self._voice_rate
+        seq_gaps = self._voice_seq_gaps
+        overrun = self._voice_overrun
+        self._reset_voice_stream()
         if not audio_bytes:
             log("Voice: end-of-utterance with no audio")
             await self.write_bridge({"t": "err", "m": "No audio received"})
@@ -1122,10 +1151,7 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                     # cycle) -> stay silent and retry next tick.
                     log("No usable config dir this cycle")
 
-            try:
-                await asyncio.wait_for(session.refresh_requested.wait(), timeout=TICK)
-            except asyncio.TimeoutError:
-                pass
+            await session.wait_for_wake(TICK)
     finally:
         try:
             await client.disconnect()
