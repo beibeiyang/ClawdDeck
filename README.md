@@ -22,7 +22,7 @@ ClawdDeck = Clawdmeter + the phone-style launcher it deserved.
 480×480 square AMOLED, LVGL 9, 16bpp — no GPU, no blur, everything drawn.
 Every screen went through the same gauntlet: build → verify against real
 reference imagery → independent blind critic → iterate until the
-critic takes the candidate over the reference. The launcher now runs the
+critic takes the candidate over the reference. The launcher runs the
 factory-desktop look: a full-bleed photo wallpaper, opaque iOS-class app
 icons with white filled glyphs, ghost-shadowed labels, and a bare white
 status row.
@@ -30,406 +30,283 @@ status row.
 |  |  |  |  |
 | :---: | :---: | :---: | :---: |
 | ![Clock](screenshots/readme/clock.png) | ![Sessions](screenshots/readme/sessions.png) | ![Level upright](screenshots/readme/level.png) | ![Voice](screenshots/readme/voice.png) |
-| **Clock** — typography-first, host-synced time with seconds | **Sessions** — recent Claude sessions, tap to resume on the Mac | **Level** — gravity-following ball; centered flat and at 6 o’clock upright | **Voice** — hold-to-dictate with a clear ready/listening state |
-| ![Settings](screenshots/readme/settings.png) | ![SpecAnalyzer](screenshots/readme/micscope.png) | ![Host](screenshots/readme/apps-registry.png) | ![Clawdmeter](screenshots/splash.gif) |
-| **Settings** — brightness, BLE pairing, storage/memory/battery telemetry, close background apps, restart / power-off (two-tap guarded) | **SpecAnalyzer** — live spectrum | **Host** — placeholder in the glass-card language | **Clawdmeter** — the original usage meter + splash animations |
+| **Clock** — typography-first, host-synced time with seconds | **Sessions** — recent Claude sessions, tap to resume on the Mac | **Level** — gravity-following ball; centered flat and at 6 o’clock upright | **Voice** — hold to dictate; words appear as you speak ([details](#voice-dictation)) |
+| ![Settings](screenshots/readme/settings-hw.png) | ![SpecAnalyzer](screenshots/readme/micscope.png) | ![Host](screenshots/readme/apps-registry.png) | ![Clawdmeter](screenshots/splash.gif) |
+| **Settings** — brightness, pairing, device telemetry, actions (below) | **SpecAnalyzer** — live spectrum | **Host** — placeholder in the glass-card language | **Clawdmeter** — the original usage meter + splash animations |
 
-On hardware — settings and the pairing danger card, next to the simulator
-reference. The displayed address is a fabricated privacy placeholder, not the
-board's Bluetooth address; use the address reported by a Bluetooth scan to pair:
-
-|  Settings (sim)  |  Settings (hardware)  |
-| :---: | :---: |
-| ![Settings sim](screenshots/readme/settings.png) | ![Settings hw](screenshots/readme/settings-hw.png) |
-
-### What's in Settings now
+**Settings** in detail (the address shown on the hardware screenshot is a
+privacy placeholder — pair with the address a Bluetooth scan reports):
 
 - **Display** — brightness (cycled live, NVS-backed).
-- **Connection** — device name, MAC, bond status; **Clear pairing** as the
-  destructive card (two-tap confirm). Clearing wipes the bonds **and
-  air-gaps the board** — it stops advertising and rejects every new pairing
-  until you deliberately re-arm it (**hold PWR 3 s → release**). This keeps
-  an in-range host with stale bond keys from silently re-pairing and
-  re-claiming the board the moment you clear it (observed within 1.5 s on
-  macOS; the air-gap is the fix).
-- **Device** — **storage %** (of the sketch partition), **memory %** (heap,
-  with PSRAM boards showing free RAM), **battery %** (live, charging aware).
-- **Actions** — **Close background apps (n)** (torn down properly, count
-  updates live), **Restart**, **Power off**. The two one-shot actions are
-  guarded: first tap arms them ("Tap again to confirm", 4-second window) so
-  a stray double-press can't reboot or brick the session.
+- **Connection** — device name, MAC, bond status, and **Clear pairing**
+  (two-tap confirm). Clearing wipes the bonds **and air-gaps the board**: it
+  stops advertising and rejects new pairings until you re-arm it (hold PWR
+  3 s → release). Otherwise an in-range host with stale bond keys silently
+  re-pairs within ~1.5 s on macOS.
+- **Device** — storage % (sketch partition), memory % (heap; PSRAM boards
+  show free RAM), battery % (live, charging aware).
+- **Actions** — **Close background apps (n)**, **Restart**, **Power off**.
+  Restart and Power off need a second tap within 4 s.
 
-## Setting up a brand-new board (zero to running)
+## Quick start
 
-1. **Get the code**
+You need: a supported board and a USB **data** cable, the
+[PlatformIO CLI](https://docs.platformio.org/en/latest/core/installation/index.html)
+(`pip install platformio`), Python 3 (3.11+ on Windows), and Claude Code
+with an active subscription (`claude login` done).
 
-   ```bash
-   git clone https://github.com/beibeiyang/ClawdDeck.git
-   cd ClawdDeck
-   ```
-
-2. **Install PlatformIO CLI** (once per machine):
-
-   ```bash
-   pip install platformio          # or: pipx install platformio
-   ```
-
-3. **Plug the board in over USB** (a data cable, not charge-only). Linux
-   shows it as `/dev/ttyACM0`, macOS as `/dev/cu.usbmodem*`, Windows as a
-   `COM` port in Device Manager. On Linux, add yourself to the `dialout`
-   group (`sudo usermod -aG dialout $USER`, then log out/in) — or prefix the
-   flash command with `sg dialout -c`.
-
-4. **Flash the firmware** ("flush" = this — writing the firmware image into
-   the board's flash):
-
-   ```bash
-   ./flash.sh waveshare_amoled_216                     # Linux (defaults to /dev/ttyACM0)
-   ./flash-mac.sh waveshare_amoled_216                 # macOS (auto-detects the port)
-   pio run -d firmware -e waveshare_amoled_216 -t upload --upload-port COM5   # Windows
-   ```
-
-   The board name = the PlatformIO env — run `./flash.sh` with no arguments
-   to list the available boards. The first flash builds the whole firmware
-   (~1-3 min); reflashes are seconds. The board reboots itself when done.
-
-5. **First boot** — the splash plays the Clawd animations while the device
-   advertises over Bluetooth as **ClawdDeck**, waiting for a paired host.
-
-6. **Pair + install the daemon** — follow your platform's section below
-   (Linux, macOS or Windows): pair over Bluetooth, then run the matching
-   installer, which pushes your Claude usage to the display every 60 s.
-
-7. **First gestures** — swipe left/right to page the launcher, tap a tile to
-   open its app, swipe up (or the home pill) to go home. In
-   **Settings → Actions**, Power off / Restart ask for a second confirming
-   tap.
-
-## Voice dictation — talk to your CLI agents
-
-Hold the **mic tile** in the Voice app, speak, release. The board captures
-16 kHz mono audio, encodes it as IMA-ADPCM, and streams it over BLE to the
-host daemon, which decodes it and transcribes with **faster-whisper
-(tiny.en)**. The transcript lands on the board's glass — and can become an
-actual **prompt in whatever CLI agent is focused** (Claude Code, Codex,
-Cursor, aider, a plain shell — it's just typing into the frontmost window).
-
-Two ways to talk, they coexist:
-
-| Input | Path | Effect |
-| --- | --- | --- |
-| **Mic tile (hold)** | board mic → BLE → daemon whisper | transcript on the panel; with injection on, typed into the focused terminal |
-| **BOOT button (hold)** | HID Space | the host's own voice-mode push-to-talk (unchanged) |
-
-The typed prompt is **not auto-submitted by default** — the cursor blinks at
-the end of your text and you hit Enter after a glance. Auto-submit is
-opt-in. A safety prefix (" x" typed then backspaced) guards the send:
-if Enter ever misfires mid-stream, the worst case is a stray `" x"` line,
-never your dictation.
-
-### Enable injection (macOS, once)
+**1. Get the code**
 
 ```bash
-# in the daemon venv (install-mac.sh creates daemon/.venv):
-daemon/.venv/bin/pip install pyobjc-framework-Quartz \
-    pyobjc-framework-ApplicationServices faster-whisper numpy
-
+git clone https://github.com/beibeiyang/ClawdDeck.git
+cd ClawdDeck
 ```
 
-**Grant Accessibility to the daemon's Python.app (required on macOS).**
-Without it the transcript still appears on the panel, but typing into the
-terminal fails and the board shows `Accessibility permission missing`. The
-daemon runs under launchd as your Python's `Python.app` — *not* the venv
-`python` symlink, and not your terminal — so that app is what needs the grant:
+**2. Flash the firmware** — pick your board's env:
+
+| Board | Env |
+| --- | --- |
+| [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786) (reference board) | `waveshare_amoled_216` |
+| [Waveshare ESP32-C6-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-c6-touch-amoled-2.16.htm?&aff_id=149786) | `waveshare_amoled_216_c6` |
+| [Waveshare ESP32-S3-Touch-AMOLED-1.8](https://www.waveshare.com/esp32-s3-touch-amoled-1.8.htm?&aff_id=149786) | `waveshare_amoled_18` |
+| [Waveshare ESP32-C6-Touch-AMOLED-1.8](https://www.waveshare.com/esp32-c6-touch-amoled-1.8.htm?&aff_id=149786) | `waveshare_amoled_18_c6` |
+| [Waveshare ESP32-S3-Touch-AMOLED-2.06](https://www.waveshare.com/esp32-s3-touch-amoled-2.06.htm?&aff_id=149786) | `waveshare_amoled_206` |
+| [Waveshare ESP32-S3-Touch-LCD-1.54](https://www.waveshare.com/esp32-s3-lcd-1.54.htm?sku=33869&aff_id=149786) | `waveshare_lcd_154` |
+| [Waveshare ESP32-S3-Touch-LCD-4](https://www.waveshare.com/esp32-s3-touch-lcd-4.htm) | `waveshare_lcd_4` |
 
 ```bash
-# Reveal the right Python.app in Finder and open the Accessibility pane:
-open -R "$(daemon/.venv/bin/python -c 'import sys;print(sys.base_prefix)')/Resources/Python.app"
-open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+./flash-mac.sh <env> [port]     # macOS — auto-detects /dev/cu.usbmodem*
+./flash.sh <env> [port]         # Linux — defaults to /dev/ttyACM0
 ```
 
-1. Drag that `Python.app` into **System Settings → Privacy & Security →
-   Accessibility** (or click **+**, then ⌘⇧G and paste its path).
-2. Switch its toggle **on**. If a stale "Python" entry exists, remove it with
-   **−** and add it again.
-3. Restart the daemon so it picks up the permission:
+```powershell
+pio run -d firmware -e <env> -t upload --upload-port COM5   # Windows — your board's COM port
+```
+
+The first flash builds everything (~1–3 min); reflashes take seconds and the
+board reboots itself. A wrong chip family fails safely ("This chip is
+ESP32-C6, not ESP32-S3" → use the matching env). On Linux, add yourself to
+the `dialout` group first (`sudo usermod -aG dialout $USER`, then log out
+and in).
+
+**3. Pair over Bluetooth** — on boot the board advertises as **ClawdDeck**.
+
+- **macOS** — System Settings → Bluetooth → _Connect_ next to "ClawdDeck".
+- **Windows** — Settings → Bluetooth & devices → Add device → Bluetooth →
+  "ClawdDeck". Pairing is required: it enables the buttons and keeps the
+  connection.
+- **Linux** — `bluetoothctl scan le`, then with the address it reports:
+  `bluetoothctl pair <addr>` and `bluetoothctl trust <addr>`.
+
+**4. Install the daemon** — it pushes your usage to the display every 60 s
+and starts at login.
+
+```bash
+./install-mac.sh                                             # macOS
+./install.sh && systemctl --user start claude-usage-daemon   # Linux
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install-windows.ps1   # Windows (native path, not \\wsl$)
+```
+
+On macOS the installer runs the daemon in the foreground for 30 s so macOS
+can ask for Bluetooth permission, then hands it to launchd. Day-to-day
+commands for each platform are under [Daemon reference](#daemon-reference).
+
+## Using the deck
+
+The device boots into the splash. Swipe left/right to page the launcher, tap
+a tile to open its app, swipe up (or tap the home pill) to go home. On the
+splash, animations rotate every 20 s within the current usage-rate group.
+
+| Button (2.16) | Function |
+| --- | --- |
+| **Left** — BOOT, GPIO 0 | Hold: sends Space (Claude Code voice-mode push-to-talk) |
+| **Middle** — PWR, AXP2101 PKEY | On splash: next animation. **Hold 3 s + release: pairing mode** (clears the bond and re-advertises) |
+| **Right** — GPIO 18 | Press: sends Shift+Tab (Claude Code mode toggle) |
+
+Space and Shift+Tab are standard BLE HID key presses, so they reach whatever
+window has focus on the paired host. Smaller boards have fewer buttons: the
+1.8 and 2.06 have BOOT + PWR, and the LCD-4 has only BOOT (tap the panel to
+toggle splash ↔ usage).
+
+## Voice dictation
+
+Hold the **mic tile** in the Voice app and talk to whatever CLI agent is
+focused on your Mac — Claude Code, Codex, Cursor, aider, a plain shell. The
+board streams compressed audio over BLE; the daemon transcribes it live with
+[Whistle](https://cactuscompute.com/blog/whistle) (16.9 MB, CPU-only,
+offline after a one-time download) and **types the words into the focused
+window while you are still talking**, about a second behind your voice.
+The panel shows a short live tail, then a receipt like
+`Typed 22 words on your Mac`. Needs the S3 2.16 (the board with the mic) and
+macOS for typing; elsewhere the transcript just appears on the panel.
+
+**Turn it on (macOS, once):**
+
+1. Run `./install-mac.sh` — it installs the voice dependencies and prints
+   the exact `Python.app` path that needs permission.
+2. Grant **Accessibility** to that `Python.app`: System Settings → Privacy &
+   Security → Accessibility → **+** (⌘⇧G, paste the path) → switch it on.
+   It must be Python.app, not your terminal: the daemon runs under launchd.
+   Repeat after a Python upgrade replaces Python.app.
+3. Add `voice_inject=on` to `~/.config/claude-usage-monitor/config`, then
+   restart the daemon:
    `launchctl kickstart -k gui/$(id -u)/com.user.claude-usage-daemon`
 
-A successful injection logs `Voice: injected into focused window`. The grant
-is tied to the binary, so after `brew upgrade python@3.13` (or any change that
-replaces `Python.app`) repeat these steps.
+The log line `Voice: Accessibility granted — live typing enabled` confirms
+it worked. Optional settings in the same config file:
 
-Then opt in via the daemon config file
-(`~/.config/claude-usage-monitor/config`, same file that takes
-`config_dirs=`):
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `voice_autosubmit` | `off` | Press Enter after the text. Off = review first, then hit Enter yourself |
+| `voice_engine` | `auto` | `whistle`, `whisper` (faster-whisper; transcribes only after release), or `auto` (Whistle if installed) |
+| `voice_keywords` | `Claude, Claude Code, Clawdmeter` | Words to favour while decoding |
+| `voice_language` | detect | `en` `de` `fr` `es` `it` `nl` `pl` |
 
-```
-voice_inject=on
-# voice_autosubmit=on    # uncomment to let Enter fly (review-first default)
-```
+Safety behaviour: switching apps mid-sentence pauses typing instead of
+typing into the wrong window; a dropped audio packet stops typing at the gap
+and the panel says so; a `" x"` typed-then-erased prefix means a misfired
+Enter can never submit your dictation. Holding **BOOT** instead of the mic
+tile still sends Space for Claude Code's own voice mode. The daemon disables
+cactus-needle's anonymous usage pings (`NEEDLE_TELEMETRY=0`).
 
-Restart the daemon (step 3 above, or `launchctl unload`/`load` — commands in the install section). Without
-injection enabled (or on other platforms) the Voice app remains
-display-only: the transcript still appears on the panel.
+## Daemon reference
 
-### Voice transport details (for porters)
+### macOS
 
-- New GATT characteristic on the data service: **VOICE (0x…0007)**, notify.
-- Chunk envelope: `[seq:u8][flags:u8][len:u8][payload…]`, payload = one
-  self-contained IMA-ADPCM block (4-byte header
-  `[pred:i16le][step_idx:u8][rsvd:u8]` + packed nibbles). Block size follows
-  the subscribed connection's negotiated MTU. At MTU 185, 350 samples
-  (≈21.9 ms @ 16 kHz) fit in each notify, cutting the required rate from
-  about 91 to 46 notifications/s.
-- `flags` bit0 = end-of-utterance, bit1 = 8 kHz compatibility capture, and
-  bit2 on EOU = capture overrun. 16 kHz is preferred; unusually small MTUs
-  automatically use 8 kHz. Sequence gaps and overruns are rejected with a
-  retry prompt instead of transcribing silently damaged audio.
-- Codec test suite: `daemon/tests/test_voice_code.py` (round-trip SNR,
-  variable-MTU framing, 8 kHz fallback, damaged-stream rejection).
-
-## Screens
-
-The device boots into the splash. Swiping horizontally pages the launcher;
-tap a tile to open its app; swipe up (or the home pill) returns home.
-
-While the splash is up, the middle (PWR) button cycles animations. **Hold
-the power button for 3 seconds, then release, to put the device into
-pairing mode** — this clears the saved Bluetooth bond and re-advertises.
-The firmware also auto-rotates animations every 20 s within the current
-usage-rate group, so a long stretch on the splash isn't just one Clawd on
-loop.
-
-## Hardware
-
-Boards supported out of the box:
-
-- [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786)
-- [Waveshare ESP32-C6-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-c6-touch-amoled-2.16.htm?&aff_id=149786)
-- [Waveshare ESP32-S3-Touch-AMOLED-1.8](https://www.waveshare.com/esp32-s3-touch-amoled-1.8.htm?&aff_id=149786)
-- [Waveshare ESP32-C6-Touch-AMOLED-1.8](https://www.waveshare.com/esp32-c6-touch-amoled-1.8.htm?&aff_id=149786)
-- [Waveshare ESP32-S3-Touch-AMOLED-2.06](https://www.waveshare.com/esp32-s3-touch-amoled-2.06.htm?&aff_id=149786)
-- [Waveshare ESP32-S3-Touch-LCD-1.54](https://www.waveshare.com/esp32-s3-lcd-1.54.htm?sku=33869&aff_id=149786)
-- [Waveshare ESP32-S3-Touch-LCD-4](https://www.waveshare.com/esp32-s3-touch-lcd-4.htm)
-
-> Please check if a pull request exists for your alternative hardware port before opening a new one, providing QA feedback and testing on the same hardware is more valuable than duplicate pull requests.
-
-**Porting to another board:** the firmware is a thin HAL with per-board folders under `firmware/src/boards/`. Drop in a new folder and a new PlatformIO env — `main.cpp`, `ui.cpp`, and `splash.cpp` never need to change. See [`docs/porting/adding-a-board.md`](docs/porting/adding-a-board.md) for the walk-through and [`docs/porting/hal-contract.md`](docs/porting/hal-contract.md) for the interfaces a port must implement.
-
-## Prerequisites
-
-- Linux (tested on Ubuntu), macOS, or Windows 10/11
-- [PlatformIO CLI](https://docs.platformio.org/en/latest/core/installation/index.html)
-- Linux: `curl`, `bluetoothctl`, `busctl` (BlueZ Bluetooth stack)
-- macOS: `python3` (the installer sets up a venv with `bleak` and `httpx`)
-- Windows: `python3` 3.11+ (the installer sets up a venv with `bleak`, `httpx`, and `pystray`)
-- Claude Code with an active subscription
-
-## macOS installation
-
-The macOS host pieces — Python daemon, LaunchAgent, and flash helper — were ported by [Chris Davidson (@lorddavidson)](https://github.com/lorddavidson). Thanks Chris!
-
-### Flash the firmware
+Reads the OAuth token from the Keychain (service `Claude Code-credentials`).
+Runs as a LaunchAgent; only one daemon can run at a time (a second copy
+exits and names the running one).
 
 ```bash
-./flash-mac.sh waveshare_amoled_216                       # ESP32-S3 2.16" (auto-detects /dev/cu.usbmodem*)
-./flash-mac.sh waveshare_amoled_216_c6                    # ESP32-C6 2.16" variant
-./flash-mac.sh waveshare_amoled_18  /dev/cu.usbmodem1101  # ESP32-S3 1.8" (or pass an explicit USB serial port)
+tail -F ~/Library/Logs/claude-usage-daemon.out.log                           # live logs
+launchctl kickstart -k gui/$(id -u)/com.user.claude-usage-daemon             # restart
+launchctl unload ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist   # stop
+launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist  # start
 ```
 
-The board env name is required. Run `./flash-mac.sh` with no args to see the available envs (scraped from `firmware/platformio.ini`).
+The daemon only connects to the ClawdDeck this Mac is paired with; it never
+scans for other boards.
 
-### Pair the device
+### Linux
 
-After flashing, open **System Settings → Bluetooth** and click _Connect_ next to "ClawdDeck". The daemon only ever connects to the peripheral this Mac is paired/connected to — it never scans for a nearby device — so once it's connected here the daemon picks it up on its next poll (~60 s).
-
-### Install the daemon
-
-The daemon reads your Claude OAuth token from the macOS Keychain (service `Claude Code-credentials`), polls usage every 60 s, and pushes it to the display over BLE.
+Reads the token from `~/.claude/.credentials.json`. Requires `curl`,
+`bluetoothctl` and `busctl` (BlueZ).
 
 ```bash
-./install-mac.sh
+systemctl --user status claude-usage-daemon     # status
+journalctl --user -u claude-usage-daemon -f     # live logs
 ```
 
-The installer creates a Python venv in `daemon/.venv/`, installs `bleak` and `httpx`, renders a LaunchAgent into `~/Library/LaunchAgents/com.user.claude-usage-daemon.plist`, and loads it. The first run is launched interactively so macOS prompts for Bluetooth permission.
+### Windows
 
-Useful commands:
+Runs natively (no WSL) as a tray app that starts at login. Reads the token
+from `%USERPROFILE%\.claude\.credentials.json` (falling back to
+`%LOCALAPPDATA%\Claude\`, then `%APPDATA%\Claude\`). The installer creates a
+venv from the in-repo requirements, registers an `HKCU\…\Run` autostart (no
+admin), and launches the tray headlessly.
 
-```bash
-launchctl list | grep claude-usage                                          # check it's running
-tail -F ~/Library/Logs/claude-usage-daemon.out.log                          # live logs
-launchctl unload ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist  # stop
-launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist # start
-```
-
-## Linux installation
-
-### Flash the firmware
-
-```bash
-./flash.sh waveshare_amoled_216                  # ESP32-S3 2.16" (defaults to /dev/ttyACM0)
-./flash.sh waveshare_amoled_216_c6               # ESP32-C6 2.16" variant
-./flash.sh waveshare_amoled_18  /dev/ttyACM1     # ESP32-S3 1.8" (or pass an explicit USB serial port)
-```
-
-The board env name is required. Run `./flash.sh` with no args to see the available envs (scraped from `firmware/platformio.ini`).
-
-### Pair the device
-
-After flashing, the device advertises as "ClawdDeck". Pair it once:
-
-```bash
-# Scan for the device
-bluetoothctl scan le
-
-# When "ClawdDeck" appears, pair and trust it
-BOARD_MAC="replace-with-address-from-scan"
-bluetoothctl pair "$BOARD_MAC"
-bluetoothctl trust "$BOARD_MAC"
-```
-
-To re-pair later, hold the power button for 3 seconds then release — the device clears its saved bond and re-advertises.
-
-### Install the daemon
-
-The daemon polls your Claude usage every 60 seconds and sends it to the display over BLE.
-
-```bash
-./install.sh
-systemctl --user start claude-usage-daemon
-```
-
-Check status: `systemctl --user status claude-usage-daemon`
-
-View logs: `journalctl --user -u claude-usage-daemon -f`
-
-## Windows installation
-
-Runs natively on Windows — no WSL required. A system-tray app polls your usage and pushes it over BLE, and starts automatically at login.
-
-### Prerequisites
-
-- **Native Windows** (not WSL).
-- **Python 3.11+** from [python.org](https://www.python.org/downloads/) — check _"Add python.exe to PATH"_ during install.
-- **Claude Code** installed, with `claude login` completed. The token is read from `%USERPROFILE%\.claude\.credentials.json` (falling back to `%LOCALAPPDATA%\Claude\` then `%APPDATA%\Claude\`).
-- The repo on a **native Windows path** (e.g. `%USERPROFILE%\Clawdmeter`), **not** a `\\wsl$` share — the installer refuses a WSL path.
-
-### Flash the firmware
+The tray icon's corner shows **green** Connected, **amber** Scanning, **red**
+Error (one notification on entering Error); right-click for status, **Start
+at login**, and **Quit** (pairing stays intact).
 
 ```powershell
-pio run -d firmware -e waveshare_amoled_216 -t upload --upload-port COM5   # use your device's COM port
-```
-
-Run `pio run -d firmware` with no env to see the available board envs.
-
-### Pair the device
-
-The device is a bonded BLE HID keyboard, so pair it once: **Settings → Bluetooth & devices → Add device → Bluetooth**, then select "ClawdDeck". Pairing is **required** — it enables the physical buttons and keeps a persistent connection (the device keeps showing your last-synced usage even after the daemon quits). To undo, use **Remove device** (this disables the buttons).
-
-### Install the daemon (recommended)
-
-From the repo root in PowerShell:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File install-windows.ps1
-```
-
-This creates a venv, installs `bleak`/`httpx`/`pystray`/`Pillow` from the in-repo requirements (no internet downloads), registers a per-user login-autostart entry (`HKCU\…\Run`, no admin needed), and launches the tray app headlessly (no console window).
-
-### Run manually instead (optional)
-
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1        # if blocked: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned, then retry
-pip install -r daemon\requirements-windows.txt
-python daemon\claude_usage_daemon_windows.py        # runs in the foreground; Ctrl+C to stop
-```
-
-### Tray icon and menu
-
-The icon's corner bubble shows state — **green** Connected, **amber** Scanning, **red** Error — and hovering shows the status (`Connected · last update HH:MM`). A notification fires once when it enters Error (e.g. an expired token). Right-click for the menu:
-
-- **Status header** — live state + last sync time.
-- **Start at login** — toggle autostart on/off.
-- **Quit** — stops the daemon cleanly; leaves the Windows pairing intact (device keeps its last reading).
-
-### Logs and troubleshooting
-
-```powershell
-Get-Content $env:LOCALAPPDATA\Clawdmeter\daemon.log -Tail 30        # view logs
+Get-Content $env:LOCALAPPDATA\Clawdmeter\daemon.log -Tail 30                       # logs
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v Clawdmeter /f   # remove autostart
 ```
 
-| Symptom                                | Fix                                                      |
-| -------------------------------------- | -------------------------------------------------------- |
-| `Device not found`                     | Power on the device; make sure it's in range and paired. |
-| `token expired` toast / `API HTTP 401` | Re-run `claude login`, then restart the daemon.          |
-| `Connection failed`                    | Toggle Windows Bluetooth off/on in Settings.             |
-| `Warning: running under Linux/WSL`     | Run from a native PowerShell window, not a WSL shell.    |
+Run it in the foreground instead:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1        # if blocked: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+pip install -r daemon\requirements-windows.txt
+python daemon\claude_usage_daemon_windows.py
+```
+
+| Symptom | Fix |
+| --- | --- |
+| `Device not found` | Power on the device; make sure it's in range and paired. |
+| `token expired` toast / `API HTTP 401` | Re-run `claude login`, then restart the daemon. |
+| `Connection failed` | Toggle Windows Bluetooth off/on in Settings. |
+| `Warning: running under Linux/WSL` | Run from a native PowerShell window, not a WSL shell. |
 
 ## How it works
 
 <img src="assets/readme/magnifier.gif" width="150" align="right" alt="">
 
-1. The daemon reads your Claude Code OAuth token — from the macOS Keychain (service `Claude Code-credentials`) on macOS, or from `~/.claude/.credentials.json` on Linux (`%USERPROFILE%\.claude\.credentials.json` on Windows).
-2. It makes a minimal API call to `api.anthropic.com/v1/messages` — one token of Haiku, basically free.
-3. The usage numbers come straight out of the response headers (`anthropic-ratelimit-unified-5h-utilization` and friends).
-4. The daemon connects to the ESP32 over BLE and writes a JSON payload to the GATT RX characteristic.
-5. The firmware parses it and updates the LVGL dashboard.
-6. The firmware also tracks the rate of change of session % over a 5-minute window and picks splash animations from the matching mood group.
-7. The two side buttons are independent of all of this — they send Space and Shift+Tab as BLE HID keyboard input to the paired host directly.
+1. The daemon reads your Claude Code OAuth token (location per platform
+   above) and makes a minimal API call to `api.anthropic.com/v1/messages` —
+   one token of Haiku, basically free.
+2. The usage numbers come straight out of the response headers
+   (`anthropic-ratelimit-unified-5h-utilization` and friends).
+3. It writes them as JSON to the board's GATT RX characteristic over BLE;
+   the firmware updates the LVGL dashboard.
+4. The firmware tracks how fast session % changes over 5 minutes and picks
+   splash animations from the matching mood group.
+5. The buttons work independently of all this — they are HID key presses
+   sent straight to the paired host.
 
-## Physical buttons
+### BLE protocol
 
-The board has three side buttons. Left and right send HID keys; the middle (PWR) button cycles splash animations and, held for 3 seconds, triggers pairing mode.
+The device advertises a custom GATT service alongside the standard HID
+keyboard service:
 
-| Button           | GPIO         | Function                                                     |
-| ---------------- | ------------ | ------------------------------------------------------------ |
-| **Left**         | GPIO 0       | Hold to send Space (Claude Code voice-mode push-to-talk)     |
-| **Middle** (PWR) | AXP2101 PKEY | On splash: cycle animations. Hold 3s + release: pairing mode |
-| **Right**        | GPIO 18      | Press to send Shift+Tab (Claude Code mode toggle)            |
+| | UUID |
+| --- | --- |
+| **Data Service** | `4c41555a-4465-7669-6365-000000000001` |
+| RX Characteristic (write) | `…0002` |
+| TX Characteristic (notify) | `…0003` |
+| Bridge host→device / device→host, voice chunks (notify) | `…0005` / `…0006` / `…0007` |
+| **HID Service** | `00001812-0000-1000-8000-00805f9b34fb` |
 
-Space and Shift+Tab go out as standard BLE HID keyboard reports, so they trigger in whatever window has focus on the paired host — not just Claude Code.
-
-## BLE protocol
-
-The device advertises a custom GATT service alongside the standard HID keyboard service:
-
-|                            | UUID                                   |
-| -------------------------- | -------------------------------------- |
-| **Data Service**           | `4c41555a-4465-7669-6365-000000000001` |
-| RX Characteristic (write)  | `4c41555a-4465-7669-6365-000000000002` |
-| TX Characteristic (notify) | `4c41555a-4465-7669-6365-000000000003` |
-| **HID Service**            | `00001812-0000-1000-8000-00805f9b34fb` |
-| **Voice Chars (notify)**   | `4c41555a-4465-7669-6365-000000000005`–`007` (bridge host→device, bridge cmds device→host, voice chunks device→host) |
-
-JSON payload format (written to RX):
+Usage payload (written to RX):
 
 ```json
 { "s": 45, "sr": 120, "w": 28, "wr": 7200, "st": "allowed", "ok": true }
 ```
 
-Fields: `s` = session %, `sr` = session reset (minutes), `w` = weekly %, `wr` = weekly reset (minutes), `st` = status, `ok` = success flag.
+`s` = session %, `sr` = session reset (minutes), `w` = weekly %,
+`wr` = weekly reset (minutes), `st` = status, `ok` = success flag.
+
+Voice transport (for porters):
+
+- Chunk envelope `[seq:u8][flags:u8][len:u8][payload…]`; the payload is one
+  self-contained IMA-ADPCM block (`[pred:i16le][step_idx:u8][rsvd:u8]` +
+  packed nibbles) sized to the negotiated MTU — at MTU 185, 350 samples
+  (≈21.9 ms @ 16 kHz), 46 notifies/s.
+- `flags`: bit0 end-of-utterance, bit1 8 kHz capture (small-MTU fallback),
+  bit2 on EOU capture overrun. Sequence gaps and overruns are rejected with a
+  retry prompt, never transcribed.
+- Host → panel over the bridge: `{"t":"vp","c":<committed>,"p":<pending>}`
+  while you talk (≤4 Hz, ASCII-folded, ≤160 chars), then
+  `{"t":"vt","tx":…,"inj":…,"n":…,"m":…}` or `{"t":"err","m":…}`.
+- Tests: `daemon/tests/test_voice_code.py` (codec, framing) and
+  `daemon/tests/test_voice_whistle.py` (live path, typing edge cases).
 
 ## Development
 
 <img src="assets/readme/crab.gif" width="120" align="right" alt="">
 
 - **Desktop simulator** — iterate on the UI without hardware: an SDL2 window
-  runs the full firmware loop with scenario playback (`pio run -d firmware -e
-sim`, then `cd firmware && .pio/build/sim/program`). See
-  [`SIM-USAGE.md`](SIM-USAGE.md) for controls, scenarios, and headless
-  screenshots.
+  runs the full firmware loop with scenario playback
+  (`pio run -d firmware -e sim`, then `cd firmware && .pio/build/sim/program`).
+  See [`SIM-USAGE.md`](SIM-USAGE.md).
+- **Porting to another board** — each board is a folder under
+  `firmware/src/boards/` plus a PlatformIO env; shared code never changes.
+  See [`docs/porting/adding-a-board.md`](docs/porting/adding-a-board.md) and
+  [`docs/porting/hal-contract.md`](docs/porting/hal-contract.md). Please check
+  for an existing pull request for your hardware first — testing and QA
+  feedback there beats a duplicate port.
 - **Splash animations** — Anthropic's official Clawd sprites, archived with
-  provenance notes in [`research/clawd-official/`](research/clawd-official/);
+  provenance in [`research/clawd-official/`](research/clawd-official/);
   `node tools/convert_official_clawd.js` regenerates
   `firmware/src/splash_animations.h`. See [`tools/README.md`](tools/README.md).
-- **Icons** — Lucide PNGs convert to LVGL C arrays with
-  `tools/png_to_lvgl.js`. See [`tools/README.md`](tools/README.md).
-- **Fonts** — the pre-compiled LVGL fonts and the LVGL-9 patching they need:
+- **Icons** — Lucide PNGs → LVGL C arrays with `tools/png_to_lvgl.js`.
+- **Fonts** — pre-compiled LVGL fonts and the LVGL 9 patching they need:
   [`docs/fonts.md`](docs/fonts.md).
-- **Porting** — [`docs/porting/adding-a-board.md`](docs/porting/adding-a-board.md)
-  and [`docs/porting/hal-contract.md`](docs/porting/hal-contract.md).
 
 ## Credits
 
