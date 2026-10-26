@@ -212,6 +212,14 @@ if [ ! -d "$VENV_DIR" ]; then
 fi
 "$VENV_DIR/bin/pip" install --quiet --upgrade pip
 "$VENV_DIR/bin/pip" install --quiet "bleak>=0.22" "httpx>=0.27"
+# Voice dictation: live speech-to-text (Whistle) + typing into the focused
+# app (pyobjc). Optional — the usage monitor works without them.
+if ! "$VENV_DIR/bin/pip" install --quiet numpy "cactus-needle>=3.2.8" \
+        pyobjc-framework-Quartz pyobjc-framework-ApplicationServices; then
+    echo "  Voice dependencies failed to install; dictation stays disabled."
+    echo "  Retry later: $VENV_DIR/bin/pip install numpy cactus-needle \\"
+    echo "    pyobjc-framework-Quartz pyobjc-framework-ApplicationServices"
+fi
 PYTHON_BIN="$VENV_DIR/bin/python"
 echo "  OK ($PYTHON_BIN)"
 echo ""
@@ -241,13 +249,16 @@ echo ""
 echo "[5/6] Bluetooth permission check..."
 echo "  On first run the daemon will trigger a Bluetooth permission prompt."
 echo "  macOS only prompts for foreground processes — so we'll run it"
-echo "  interactively once below. Press Ctrl+C after you see 'Scanning...'"
-echo "  and grant permission when prompted. Then re-run this installer"
-echo "  (or just continue) to enable launchd autostart."
+echo "  interactively for 30 seconds below (it stops by itself). Grant"
+echo "  Bluetooth permission if prompted."
 echo ""
 read -r -p "Run a permission-priming scan now? [Y/n] " ans
 if [[ ! "$ans" =~ ^[Nn]$ ]]; then
-    "$PYTHON_BIN" "$DAEMON_PY" || true
+    # Stop the installed service first: two daemons both receive every voice
+    # notification, so both would transcribe and type (and the terminal-run
+    # copy fails the Accessibility check, which belongs to Python.app).
+    launchctl unload "$PLIST_DST" 2>/dev/null || true
+    "$PYTHON_BIN" "$DAEMON_PY" --exit-after 30 || true
 fi
 echo ""
 
@@ -277,6 +288,16 @@ echo "[6/6] Loading launchd service..."
 launchctl unload "$PLIST_DST" 2>/dev/null || true
 launchctl load -w "$PLIST_DST"
 echo "  Loaded."
+echo ""
+
+PY_APP="$("$PYTHON_BIN" -c 'import sys,os;print(os.path.join(sys.base_prefix,"Resources","Python.app"))')"
+echo "Voice dictation typing (optional, once):"
+echo "  To type dictation into the focused app, grant Accessibility to:"
+echo "    $PY_APP"
+echo "  System Settings → Privacy & Security → Accessibility → + (⌘⇧G to paste"
+echo "  the path), switch it on, then:"
+echo "    launchctl kickstart -k gui/$(id -u)/com.user.claude-usage-daemon"
+echo "  and set voice_inject=on in ~/.config/claude-usage-monitor/config."
 echo ""
 
 echo "=== Done ==="
