@@ -8,24 +8,30 @@ bleak (CoreBluetooth backend on macOS).
 
 import asyncio
 import calendar
+import concurrent.futures
 import datetime
+import importlib.util
 import getpass
 import json
 import os
+import queue
 import re
 import shutil
 import signal
 import subprocess
 import sys
 import time
+import unicodedata
 from pathlib import Path
 
 import httpx
 from bleak import BleakClient
 from bleak.exc import BleakError
 
-# Voice dictation: ADPCM decode + faster-whisper (both optional at import —
-# the daemon still runs rate-limit duty without them).
+# Voice dictation: ADPCM decode + speech-to-text (all optional at import —
+# the daemon still runs rate-limit duty without them). Whistle
+# (cactus-needle) is preferred because it streams partial transcripts while
+# you talk; faster-whisper is the whole-clip fallback.
 try:
     import numpy as np
 except ImportError:
@@ -34,6 +40,8 @@ try:
     from faster_whisper import WhisperModel
 except ImportError:
     WhisperModel = None
+# cactus-needle phones home with anonymous usage counts unless told not to.
+os.environ.setdefault("NEEDLE_TELEMETRY", "0")
 
 from claude_sessions import (
     find_session_cwd,
@@ -178,8 +186,18 @@ def read_voice_cfg() -> dict:
       voice_autosubmit=on  press Enter after typing (per-agent Enter keys
       are a follow-up; Enter is correct for shells + Claude Code and the
       default stays review-before-send)
+
+    Strings:
+      voice_engine=auto|whistle|whisper   auto = Whistle when installed
+      voice_keywords=Claude, Clawdmeter   comma list biased during decoding
+                                          (Whistle only)
+      voice_language=en                   force one of en de fr es it nl pl;
+                                          empty = detect (Whistle only)
     """
-    cfg = {"voice_inject": False, "voice_autosubmit": False}
+    cfg: dict = {"voice_inject": False, "voice_autosubmit": False,
+                 "voice_engine": "auto",
+                 "voice_keywords": list(DEFAULT_VOICE_KEYWORDS),
+                 "voice_language": None}
     try:
         if CONFIG_FILE.exists():
             for line in CONFIG_FILE.read_text().splitlines():
@@ -187,9 +205,15 @@ def read_voice_cfg() -> dict:
                 if "=" not in line:
                     continue
                 key, val = line.split("=", 1)
-                k = key.strip().lower()
-                if k in cfg:
-                    cfg[k] = val.strip().lower() in ("1", "on", "true", "yes")
+                k, v = key.strip().lower(), val.strip()
+                if k in ("voice_inject", "voice_autosubmit"):
+                    cfg[k] = v.lower() in ("1", "on", "true", "yes")
+                elif k == "voice_engine" and v.lower() in ("auto", "whistle", "whisper"):
+                    cfg[k] = v.lower()
+                elif k == "voice_keywords":
+                    cfg[k] = [w.strip() for w in v.split(",") if w.strip()]
+                elif k == "voice_language":
+                    cfg[k] = v.lower() or None
     except OSError:
         pass
     return cfg
@@ -724,6 +748,336 @@ def whisper_transcribe(pcm: "np.ndarray") -> "str | None":
 _whisper_model = None
 
 
+# ---- Whistle live transcription ---------------------------------------------
+# The board already streams ADPCM in real time; Whistle re-transcribes the
+# growing buffer every VOICE_CHUNK_SAMPLES and commits the words two passes
+# agree on, so committed text never changes under the reader. Each pass costs
+# tens of ms on Apple silicon, so text trails speech by ~one chunk.
+DEFAULT_VOICE_KEYWORDS = ("Claude", "Claude Code", "Clawdmeter")
+VOICE_CHUNK_SAMPLES = SAMPLE_RATE_VOICE // 2   # 0.5 s per streaming pass
+VOICE_STALL_TIMEOUT = 30.0   # worker gives up on an utterance that stops feeding
+VOICE_FINAL_TIMEOUT = 15.0
+PARTIAL_MIN_INTERVAL = 0.25  # cap 'vp' bridge writes at 4 Hz
+PARTIAL_MAX_CHARS = 160      # committed tail + pending; panel shows ~3 lines
+FINAL_MAX_CHARS = 400        # device label buffer is 480 bytes
+
+_ASCII_MAP = str.maketrans({
+    "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'",
+    "\u201c": '"', "\u201d": '"', "\u201e": '"',
+    "\u2013": "-", "\u2014": "-", "\u2026": "...", "\u00a0": " ",
+})
+
+
+def device_text(text: str) -> str:
+    """Fold a transcript to the panel's glyph set (fonts are ASCII 0x20-0x7E).
+
+    Accents are stripped (café -> cafe) rather than dropped as missing glyphs.
+    Only the copy sent to the panel is folded; injection keeps the original.
+    """
+    text = unicodedata.normalize("NFKD", text.translate(_ASCII_MAP))
+    text = re.sub(r"\s+", " ", text)   # before the filter, or \t/\n glue words
+    return "".join(c for c in text if " " <= c <= "~").strip()
+
+
+def tail_text(text: str, limit: int) -> str:
+    """The last <= limit chars of text, cut at a word boundary, '...'-prefixed."""
+    if len(text) <= limit:
+        return text
+    cut = text[len(text) - (limit - 3):]
+    space = cut.find(" ")
+    if 0 <= space < 24:
+        cut = cut[space + 1:]
+    return "..." + cut
+
+
+def partial_payload(committed: str, pending: str) -> dict:
+    """Bridge message for a live transcript: committed text + unconfirmed tail.
+
+    Older committed words are trimmed from the left so the newest speech always
+    fits the panel's transcript box.
+    """
+    pending = tail_text(device_text(pending), PARTIAL_MAX_CHARS // 2)
+    committed = device_text(committed)
+    room = PARTIAL_MAX_CHARS - len(pending) - (1 if pending else 0)
+    return {"t": "vp", "c": tail_text(committed, max(room, 0)) if room > 0 else "",
+            "p": pending}
+
+
+def resolve_voice_engine(choice: str) -> str:
+    """'whistle' or 'whisper' for the configured choice and installed packages."""
+    has_whistle = importlib.util.find_spec("needle") is not None
+    if choice == "whistle" or (choice == "auto" and has_whistle):
+        return "whistle" if has_whistle else "whisper"
+    return "whisper"
+
+
+class WhistleUtterance:
+    """One live-transcribed utterance. feed() from the event loop; the stream
+    itself runs on the engine's single worker thread."""
+
+    def __init__(self, on_partial) -> None:
+        self._q: "queue.Queue[np.ndarray | None]" = queue.Queue()
+        self._block: list = []
+        self._held = 0
+        self.audio: list = []      # every sample, for the final whole-clip pass
+        self.samples = 0
+        self.aborted = False
+        self.final_pass = True
+        self.on_partial = on_partial
+        self.future: "concurrent.futures.Future | None" = None
+
+    def feed(self, pcm16: "np.ndarray") -> None:
+        samples = pcm16.astype(np.float32) / 32768.0
+        self.audio.append(samples)
+        self.samples += len(samples)
+        self._block.append(samples)
+        self._held += len(samples)
+        if self._held >= VOICE_CHUNK_SAMPLES:
+            self._q.put(np.concatenate(self._block))
+            self._block, self._held = [], 0
+
+    def close(self) -> None:
+        if self._block:
+            self._q.put(np.concatenate(self._block))
+            self._block, self._held = [], 0
+        self._q.put(None)
+
+    def abort(self) -> None:
+        self.aborted = True
+        self._q.put(None)
+
+    def chunks(self):
+        while True:
+            try:
+                chunk = self._q.get(timeout=VOICE_STALL_TIMEOUT)
+            except queue.Empty:   # link died without an EOU or abort
+                self.aborted = True
+                return
+            if chunk is None:
+                return
+            yield chunk
+
+
+class WhistleEngine:
+    """Owns the Whistle model on ONE thread: the engine is not thread-safe and
+    holds one model per process, so every call (load, stream, transcribe) goes
+    through the same single-worker executor."""
+
+    def __init__(self) -> None:
+        self._pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="whistle")
+        self._model = None
+
+    def _load(self):
+        if self._model is None:
+            import needle   # lazy: keeps daemon start-up free of the engine
+            log("Voice: loading Whistle (first use downloads ~17 MB)")
+            started = time.time()
+            self._model = needle.Whistle()
+            log(f"Voice: Whistle ready in {time.time() - started:.1f}s")
+        return self._model
+
+    def warm_up(self) -> None:
+        self._pool.submit(self._load).add_done_callback(_log_future_error)
+
+    def start(self, on_partial, language, keywords,
+              final_pass: bool = True) -> WhistleUtterance:
+        utt = WhistleUtterance(on_partial)
+        utt.final_pass = final_pass
+        utt.future = self._pool.submit(self._run, utt, language, keywords)
+        return utt
+
+    def _run(self, utt: WhistleUtterance, language, keywords) -> "tuple[str, str] | None":
+        """(final, committed) for the utterance, or None when aborted/empty."""
+        model = self._load()
+        committed = ""
+        for step in model.stream(utt.chunks(), language=language, keywords=keywords):
+            if utt.aborted:
+                continue          # let the generator finish so the engine resets
+            if step.get("text"):
+                committed = f"{committed} {step['text']}".strip()
+            utt.on_partial(committed, step.get("pending", ""))
+        if utt.aborted or not utt.samples:
+            return None
+        if not utt.final_pass:
+            # Live typing already put the committed words on screen; a
+            # whole-clip pass could word things differently and leave the
+            # panel and the typed prompt disagreeing.
+            return committed, committed
+        # A whole-clip pass sees the entire utterance at once (the encoder is
+        # bidirectional) and costs ~10 ms per second of audio, so the final
+        # text gets full context instead of the streaming commits.
+        final = model.transcribe(np.concatenate(utt.audio), language=language,
+                                 keywords=keywords).get("text", "").strip()
+        return (final or committed), committed
+
+
+def _log_future_error(fut: "concurrent.futures.Future") -> None:
+    if not fut.cancelled() and fut.exception() is not None:
+        log(f"Voice: Whistle failed: {fut.exception()}")
+
+
+_whistle_engine: "WhistleEngine | None" = None
+
+
+def whistle_engine() -> WhistleEngine:
+    global _whistle_engine
+    if _whistle_engine is None:
+        _whistle_engine = WhistleEngine()
+    return _whistle_engine
+
+
+# ---- Live typing (dictation straight into the focused app) -----------------
+_ax_prompted = False   # ask macOS for the Accessibility dialog once per process
+
+
+def load_injector():
+    """inject_macos, or None off macOS / without pyobjc."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        import inject_macos
+        return inject_macos
+    except ImportError:
+        return None
+
+
+def accessibility_ok(injector, prompt: bool = False) -> bool:
+    """Check (and, at most once per process, request) the Accessibility grant.
+
+    Logs which app needs the grant: under launchd it is Python.app, but a
+    daemon started from a terminal inherits the terminal's grant instead.
+    """
+    global _ax_prompted
+    # Only the launchd copy asks: a terminal-run copy would pop the dialog
+    # for the terminal app, which is the wrong grant for the service.
+    ask = prompt and not _ax_prompted and os.getppid() == 1
+    _ax_prompted = _ax_prompted or ask
+    if injector.preflight(prompt=ask):
+        return True
+    log("Voice: Accessibility permission missing — typing disabled. Grant it to "
+        f"{injector.responsible_app_hint()} in System Settings > Privacy & "
+        "Security > Accessibility, then restart the daemon.")
+    return False
+
+
+class LiveTyper:
+    """Types committed words into the focused app while the user talks.
+
+    Committed words never change, so they can go out as soon as Whistle
+    commits them. Keystrokes run on one dedicated thread (order kept, BLE loop
+    never blocked). Edge cases:
+      - focus moves to another app mid-utterance: typing pauses and words are
+        held; they are typed if focus returns before release, else dropped
+        (status 'focus') — never sprayed into the wrong window
+      - Accessibility revoked mid-utterance: stop, status 'perm'
+      - damaged audio: stop typing at the damage, status 'partial'
+      - a second utterance into the same app (no Enter between) gets a
+        leading space so sentences don't glue together
+    """
+
+    def __init__(self, injector, prev_target: "int | None") -> None:
+        self._inj = injector
+        self._pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="typer")
+        self._prev_target = prev_target
+        self._consumed = 0          # chars of the committed string handed out
+        self._held = ""             # words waiting for focus to come back
+        self.target: "int | None" = None
+        self.typed_any = False
+        self.pushed_any = False
+        self.perm_lost = False
+        self.stopped = False
+
+    def push(self, committed: str) -> None:
+        """Queue whatever was committed since the last push (event loop)."""
+        if self.stopped or len(committed) <= self._consumed:
+            return
+        delta = committed[self._consumed:]
+        self._consumed = len(committed)
+        if delta.strip():
+            self.pushed_any = True
+            self._pool.submit(self._type, delta).add_done_callback(_log_typer_error)
+
+    def stop(self) -> None:
+        self.stopped = True
+
+    def cancel(self) -> None:
+        """Abandon the utterance: type nothing further, free the thread."""
+        self.stopped = True
+        self._pool.shutdown(wait=False, cancel_futures=True)
+
+    def _type(self, delta: str) -> None:
+        if self.stopped or self.perm_lost:
+            return
+        pid = self._inj.frontmost_pid()
+        if self.target is None:
+            self.target = pid
+        text = self._held + delta
+        if pid is not None and pid != self.target:
+            self._held = text          # wrong window: hold, don't type
+            return
+        self._held = ""
+        safety = False
+        if not self.typed_any:
+            text = text.lstrip()
+            if self._prev_target is not None and self._prev_target == self.target:
+                text = " " + text      # continuing an unsent prompt
+            safety = True              # misfired Enter submits " x", not words
+        if not self._inj.type_text(text, safety=safety):
+            self.perm_lost = True
+            return
+        self.typed_any = True
+
+    async def finish(self, committed: str, submit: bool) -> str:
+        """Type the tail, optionally press Enter; returns the outcome:
+        ok | none | focus | perm | partial."""
+        self.push(committed)
+        fut = self._pool.submit(self._finish, submit)
+        try:
+            return await asyncio.wrap_future(fut)
+        finally:
+            self._pool.shutdown(wait=False)
+
+    def _finish(self, submit: bool) -> str:
+        if self.perm_lost:
+            return "perm"
+        if self.stopped:
+            return "partial" if self.typed_any else "none"
+        if self._held:
+            if self._inj.frontmost_pid() == self.target:
+                self._type("")         # focus is back: flush the held words
+            if self._held:
+                return "focus"
+        if not self.typed_any:
+            return "none"
+        if submit and not self._inj.press_return():
+            return "perm"
+        return "ok"
+
+
+CONTINUE_PROMPT_S = 120.0   # a follow-up utterance within this continues a prompt
+
+
+def inject_status_message(inj: str, words: int, submitted: bool) -> str:
+    """One short panel line (ASCII, ~40 chars) for a typing outcome."""
+    noun = "word" if words == 1 else "words"
+    return {
+        "ok": f"{'Sent' if submitted else 'Typed'} {words} {noun} on your Mac",
+        "off": "",
+        "none": "Nothing typed - window not ready",
+        "focus": "Window changed - some words not typed",
+        "perm": "Mac needs Accessibility - see daemon log",
+        "partial": "Audio dropped - check the typed text",
+        "unavailable": "Install pyobjc on the Mac to type text",
+    }.get(inj, "")
+
+
+def _log_typer_error(fut: "concurrent.futures.Future") -> None:
+    if not fut.cancelled() and fut.exception() is not None:
+        log(f"Voice: live typing failed: {fut.exception()}")
+
+
 class Session:
     def __init__(self, client: BleakClient) -> None:
         self.client = client
@@ -737,6 +1091,18 @@ class Session:
         self._voice_seq_gaps = 0
         self._voice_overrun = False
         self.voice_ready = asyncio.Event()
+        # Live transcription (Whistle): the active utterance and the newest
+        # partial waiting to go to the panel. Partials arrive from the worker
+        # thread via call_soon_threadsafe; only the event loop writes BLE.
+        self._loop: "asyncio.AbstractEventLoop | None" = None
+        self._voice_cfg: dict = {}
+        self._voice_engine = "whisper"
+        self._utt: "WhistleUtterance | None" = None
+        self._partial: "tuple[str, str] | None" = None
+        self._partial_sent: "tuple[str, str] | None" = None
+        self._partial_at = 0.0
+        self._typer: "LiveTyper | None" = None
+        self._last_target: "tuple[int | None, float] | None" = None
 
     async def wait_for_wake(self, timeout: float) -> None:
         # Sleep until a refresh request, incoming voice audio, or the timeout.
@@ -799,7 +1165,7 @@ class Session:
         except asyncio.TimeoutError:
             log("Bridge subscription timed out")
 
-    async def write_bridge(self, payload: dict) -> bool:
+    async def write_bridge(self, payload: dict, quiet: bool = False) -> bool:
         data = json.dumps(payload, separators=(",", ":")).encode()
         if len(data) > 500:
             log(f"Bridge payload too large ({len(data)} bytes); truncating list")
@@ -807,7 +1173,8 @@ class Session:
                 payload = dict(payload)
                 payload["n"] = payload["n"][:6]
                 data = json.dumps(payload, separators=(",", ":")).encode()
-        log(f"Bridge -> device: {data.decode()}")
+        if not quiet:   # live partials go out at up to 4 Hz; keep the log readable
+            log(f"Bridge -> device: {data.decode()}")
         try:
             await self.client.write_gatt_char(HOST_RX_CHAR_UUID, data, response=False)
             return True
@@ -826,6 +1193,19 @@ class Session:
         self.voice_ready.set()   # wake the main loop; don't wait out TICK
 
     async def setup_voice_subscription(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._voice_cfg = read_voice_cfg()
+        self._voice_engine = resolve_voice_engine(self._voice_cfg.get("voice_engine", "auto"))
+        log(f"Voice engine: {self._voice_engine}")
+        if self._voice_engine == "whistle":
+            whistle_engine().warm_up()   # first dictation shouldn't pay the load
+        if self._voice_cfg.get("voice_inject"):
+            injector = load_injector()
+            if injector is None:
+                log("Voice: voice_inject=on but pyobjc is missing — install "
+                    "pyobjc-framework-Quartz pyobjc-framework-ApplicationServices")
+            elif accessibility_ok(injector, prompt=True):
+                log("Voice: Accessibility granted — live typing enabled")
         try:
             await asyncio.wait_for(
                 self.client.start_notify(VOICE_CHAR_UUID, self._on_voice),
@@ -839,7 +1219,8 @@ class Session:
     async def drain_voice(self) -> None:
         # Chunk envelope: [seq:u8][flags:u8][len:u8][payload...]; flags bit0 =
         # EOU. Preserve notification boundaries: block size follows negotiated
-        # MTU and each ADPCM block carries its own predictor header.
+        # MTU and each ADPCM block carries its own predictor header, so every
+        # block decodes on arrival and feeds the live transcriber immediately.
         while not self._voice_queue.empty():
             chunk = await self._voice_queue.get()
             if len(chunk) < 3:   # EOU is a bare 3-byte header (empty payload)
@@ -860,6 +1241,8 @@ class Session:
             elif last is not None and seq != (last + 1) & 0xFF:
                 self._voice_seq_gaps += 1
                 log(f"Voice: seq gap {last} -> {seq}")
+                if self._typer is not None:
+                    self._typer.stop()   # don't type words heard through a gap
             self._voice_last_seq = seq
             if payload:
                 packet_rate = 8000 if flags & 0x02 else SAMPLE_RATE_VOICE
@@ -869,12 +1252,90 @@ class Session:
                 self._voice_rate = packet_rate
                 self._voice_blocks.append(payload)
                 self._voice_buf.extend(payload)  # compatibility/debug byte count
+                self._feed_live(payload, packet_rate)
             if flags & 0x04:
                 self._voice_overrun = True
             if flags & 0x01:   # end-of-utterance
                 await self._transcribe_voice()
+        await self._send_partial()
+
+    # ---- Live partials -----------------------------------------------------
+    def _feed_live(self, block: bytes, rate: int) -> None:
+        """Decode one ADPCM block and hand it to the live transcriber."""
+        if self._utt is None:
+            if len(self._voice_blocks) != 1:
+                return   # whisper path, or an utterance already being dropped
+            self._voice_cfg = read_voice_cfg()   # config edits apply per utterance
+            choice = self._voice_cfg.get("voice_engine", "auto")
+            if resolve_voice_engine(choice) != "whistle" or np is None:
+                return
+            self._partial = self._partial_sent = None
+            self._typer = self._start_typer()
+            utt_holder: list = []
+
+            def on_partial(committed: str, pending: str) -> None:
+                # Worker thread -> event loop; stale utterances are ignored.
+                if self._loop is not None and utt_holder:
+                    self._loop.call_soon_threadsafe(
+                        self._set_partial, utt_holder[0], committed, pending)
+
+            self._utt = whistle_engine().start(
+                on_partial, self._voice_cfg.get("voice_language"),
+                self._voice_cfg.get("voice_keywords") or None,
+                final_pass=self._typer is None)
+            utt_holder.append(self._utt)
+        pcm = ima_adpcm_decode([block], rate)
+        if pcm is None or not len(pcm):
+            return
+        if rate == 8000:
+            pcm = np.repeat(pcm, 2)   # Whistle expects 16 kHz (see below)
+        self._utt.feed(pcm)
+
+    def _start_typer(self) -> "LiveTyper | None":
+        """A live typer when injection is on and permitted, else None (the
+        transcript is then typed — or reported — once at release)."""
+        if not self._voice_cfg.get("voice_inject"):
+            return None
+        injector = load_injector()
+        if injector is None or not accessibility_ok(injector, prompt=True):
+            return None
+        prev = None
+        if self._last_target and time.time() - self._last_target[1] < CONTINUE_PROMPT_S:
+            prev = self._last_target[0]
+        return LiveTyper(injector, prev)
+
+    def _set_partial(self, utt: "WhistleUtterance", committed: str, pending: str) -> None:
+        if utt is not self._utt:
+            return
+        self._partial = (committed, pending)
+        if self._typer is not None:
+            self._typer.push(committed)   # committed words never change: type now
+        self.voice_ready.set()
+
+    async def _send_partial(self) -> None:
+        if self._partial is None or self._partial == self._partial_sent:
+            return
+        if time.time() - self._partial_at < PARTIAL_MIN_INTERVAL:
+            return   # the next audio block or pass re-wakes the loop
+        self._partial_sent = self._partial
+        self._partial_at = time.time()
+        await self.write_bridge(partial_payload(*self._partial), quiet=True)
+
+    def _abort_live(self) -> None:
+        if self._utt is not None:
+            self._utt.abort()
+            self._utt = None
+        if self._typer is not None:
+            self._typer.cancel()
+            self._typer = None
+        self._partial = self._partial_sent = None
+
+    def close_voice(self) -> None:
+        """Session teardown: never leave the Whistle worker blocked on a feed."""
+        self._abort_live()
 
     def _reset_voice_stream(self) -> None:
+        self._abort_live()
         self._voice_buf.clear()
         self._voice_blocks.clear()
         self._voice_last_seq = None
@@ -882,67 +1343,124 @@ class Session:
         self._voice_seq_gaps = 0
         self._voice_overrun = False
 
+    async def _voice_error(self, message: str, utt=None, typer=None) -> None:
+        if utt is not None:
+            utt.abort()
+        if typer is not None:
+            typer.cancel()
+        await self.write_bridge({"t": "err", "m": message})
+
     async def _transcribe_voice(self) -> None:
         audio_bytes = bytes(self._voice_buf)
         blocks = self._voice_blocks[:]
         rate = self._voice_rate
         seq_gaps = self._voice_seq_gaps
         overrun = self._voice_overrun
+        cfg = self._voice_cfg or read_voice_cfg()
+        # Detach before the reset, which would otherwise abort them.
+        utt, self._utt = self._utt, None
+        typer, self._typer = self._typer, None
+        self._partial = self._partial_sent = None
         self._reset_voice_stream()
         if not audio_bytes:
             log("Voice: end-of-utterance with no audio")
-            await self.write_bridge({"t": "err", "m": "No audio received"})
+            await self._voice_error("No audio received", utt, typer)
             return
         log(f"Voice: transport blocks={len(blocks)} bytes={len(audio_bytes)} "
             f"rate={rate} gaps={seq_gaps} overrun={int(overrun)}")
         if overrun or seq_gaps:
-            await self.write_bridge(
-                {"t": "err", "m": "Audio link dropped data - please retry"})
+            typed = typer is not None and typer.pushed_any
+            await self._voice_error(
+                "Audio dropped - check the typed text" if typed
+                else "Audio link dropped data - please retry", utt, typer)
             return
-        pcm = ima_adpcm_decode(blocks, rate)
-        if pcm is None or len(pcm) == 0:
-            await self.write_bridge({"t": "err", "m": "Voice decode failed"})
-            return
-        dur = len(pcm) / rate
-        if dur < 0.3:   # a tap, not speech — whisper would only hallucinate
+        dur = sum(max(0, len(b) - 4) * 2 for b in blocks) / rate
+        if dur < 0.3:   # a tap, not speech — models would only hallucinate
             log(f"Voice: {dur:.2f}s utterance — too short, skipped")
-            await self.write_bridge({"t": "err", "m": "Too short - hold to talk"})
+            await self._voice_error("Too short - hold to talk", utt, typer)
             return
-        if rate == 8000:
-            # faster-whisper treats numpy waveforms as 16 kHz. Repeat samples
-            # to preserve time; this cannot restore >4 kHz detail, which is why
-            # 8 kHz is reserved for small-MTU compatibility links.
-            pcm = np.repeat(pcm, 2)
-        log(f"Voice: {dur:.1f}s @ {rate} Hz — transcribing")
-        text = whisper_transcribe(pcm)
-        if text is None:
-            # whisper_transcribe logs its own failures; None with no log line
-            # just means it heard no speech.
-            await self.write_bridge({"t": "err", "m": "No speech recognized"})
-            return
-        await self.write_bridge({"t": "vt", "tx": text})
-
-        # Optional: the transcript becomes a prompt in the focused terminal
-        # (voice_inject=on in the daemon config; off = display-only).
-        cfg = read_voice_cfg()
-        if cfg.get("voice_inject"):
-            import asyncio as _aio
+        started = time.time()
+        text: "str | None" = None
+        committed = ""
+        engine = "whisper"
+        if utt is not None and utt.future is not None:
+            utt.close()
             try:
-                import inject_macos
-                ok = await _aio.to_thread(
-                    inject_macos.type_prompt,
-                    text,
-                    submit=bool(cfg.get("voice_autosubmit")),
-                )
-                if not ok:
-                    await self.write_bridge(
-                        {"t": "err", "m": "Accessibility permission missing"})
-                else:
-                    log(f"Voice: injected into focused window "
-                        f"(autosubmit={cfg.get('voice_autosubmit')})")
-            except ImportError:
-                await self.write_bridge(
-                    {"t": "err", "m": "pyobjc not installed (inject off)"})
+                result = await asyncio.wait_for(asyncio.wrap_future(utt.future),
+                                                timeout=VOICE_FINAL_TIMEOUT)
+                if result is not None:
+                    text, committed = result
+            except asyncio.TimeoutError:
+                utt.abort()
+                log("Voice: Whistle timed out")
+            except Exception as e:   # engine/runtime errors surface here
+                log(f"Voice: Whistle failed: {e}")
+                if typer is not None and typer.pushed_any:
+                    # Words are already on screen; re-typing a whisper pass
+                    # would duplicate them.
+                    await self._voice_error(
+                        "Transcription failed - check the typed text", typer=typer)
+                    return
+                utt = None   # fall through to faster-whisper below
+            engine = "whistle"
+        if utt is None or utt.future is None:
+            if typer is not None:          # nothing live to finish; type at the end
+                typer.cancel()
+                typer = None
+            pcm = ima_adpcm_decode(blocks, rate)
+            if pcm is None or len(pcm) == 0:
+                await self._voice_error("Voice decode failed")
+                return
+            if rate == 8000:
+                # faster-whisper treats numpy waveforms as 16 kHz. Repeat samples
+                # to preserve time; this cannot restore >4 kHz detail, which is why
+                # 8 kHz is reserved for small-MTU compatibility links.
+                pcm = np.repeat(pcm, 2)
+            # Off the event loop so BLE callbacks keep flowing during the pass.
+            text = await asyncio.to_thread(whisper_transcribe, pcm)
+            engine = "whisper"
+        log(f"Voice: {dur:.1f}s @ {rate} Hz — {engine} final in "
+            f"{(time.time() - started) * 1000:.0f} ms")
+        if not text:
+            # The engines log their own failures; None with no log line
+            # just means no speech was heard.
+            await self._voice_error("No speech recognized", typer=typer)
+            return
+
+        submit = bool(cfg.get("voice_autosubmit"))
+        inj = await self._deliver_text(text, committed, typer, cfg, submit)
+        words = len(text.split())
+        await self.write_bridge({
+            "t": "vt", "tx": tail_text(device_text(text), FINAL_MAX_CHARS),
+            "inj": inj, "n": words, "m": inject_status_message(inj, words, submit)})
+
+    async def _deliver_text(self, text: str, committed: str,
+                            typer: "LiveTyper | None", cfg: dict,
+                            submit: bool) -> str:
+        """Type the transcript (live tail or whole) and return the outcome:
+        off | ok | none | focus | perm | partial | unavailable."""
+        if typer is not None:
+            inj = await typer.finish(committed, submit)
+            # Remember the window so a follow-up utterance continues the
+            # same unsent prompt with a separating space.
+            self._last_target = ((typer.target, time.time())
+                                 if inj == "ok" and not submit else None)
+        elif not cfg.get("voice_inject"):
+            return "off"
+        else:
+            injector = load_injector()
+            if injector is None:
+                log("Voice: pyobjc not installed — cannot type the transcript")
+                return "unavailable"
+            if not accessibility_ok(injector, prompt=True):
+                return "perm"
+            ok = await asyncio.to_thread(injector.type_prompt, text, submit=submit)
+            inj = "ok" if ok else "perm"
+        if inj == "ok":
+            log(f"Voice: typed into focused window (autosubmit={submit})")
+        else:
+            log(f"Voice: typing outcome: {inj}")
+        return inj
 
     async def _handle_bridge(self, msg: dict) -> None:
         cmd = msg.get("c")
@@ -1153,6 +1671,7 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
 
             await session.wait_for_wake(TICK)
     finally:
+        session.close_voice()
         try:
             await client.disconnect()
         except BleakError:
@@ -1162,9 +1681,61 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
     return used_successfully
 
 
-async def main() -> None:
+LOCK_FILE = CONFIG_FILE.parent / "daemon.lock"
+
+
+def acquire_single_instance(lock_path: Path = LOCK_FILE, wait: "bool | None" = None,
+                            poll: float = 5.0):
+    """Hold an exclusive lock so only one daemon talks to the board.
+
+    Two daemons both receive every voice notification, so both transcribe
+    and both type — duplicate text, plus a terminal-launched copy fails the
+    Accessibility check. Under launchd (parent pid 1) a busy lock means wait
+    for the other copy to exit; interactively, explain and return None.
+    Returns the open lock file (keep it referenced) or None.
+    """
+    try:
+        import fcntl
+    except ImportError:          # not POSIX: nothing to lock
+        return True
+    if wait is None:
+        wait = os.getppid() == 1
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock_path, "a+")
+    announced = False
+    while True:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            fh.seek(0)
+            holder = fh.read().strip() or "?"
+            if not wait:
+                log(f"Another ClawdDeck daemon is already running (pid {holder}); "
+                    "exiting. Stop it first: launchctl unload "
+                    "~/Library/LaunchAgents/com.user.claude-usage-daemon.plist")
+                fh.close()
+                return None
+            if not announced:
+                log(f"Waiting for the other daemon (pid {holder}) to exit...")
+                announced = True
+            time.sleep(poll)
+    fh.seek(0)
+    fh.truncate()
+    fh.write(str(os.getpid()))
+    fh.flush()
+    return fh
+
+
+async def main(exit_after: "float | None" = None) -> None:
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
+    if exit_after:
+        # Installer permission-priming run: end on our own instead of
+        # relying on the user to press Ctrl+C (a forgotten foreground copy
+        # keeps competing with the launchd daemon).
+        loop.call_later(exit_after, lambda: (log(f"--exit-after {exit_after:g}s "
+                                                  "reached"), stop_event.set()))
 
     def _stop(*_args: object) -> None:
         log("Daemon stopping")
@@ -1215,7 +1786,15 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="ClawdDeck BLE daemon (macOS)")
+    parser.add_argument("--exit-after", type=float, metavar="SECONDS",
+                        help="stop after SECONDS (installer permission priming)")
+    args = parser.parse_args()
+    _lock = acquire_single_instance()
+    if _lock is None:
+        sys.exit(1)
     try:
-        asyncio.run(main())
+        asyncio.run(main(exit_after=args.exit_after))
     except KeyboardInterrupt:
         sys.exit(0)

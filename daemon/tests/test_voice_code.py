@@ -11,6 +11,14 @@ import pytest
 
 from claude_usage_daemon import ima_adpcm_decode
 
+
+@pytest.fixture(autouse=True)
+def _pin_whisper_engine(monkeypatch):
+    """The legacy transport tests exercise the faster-whisper path; Whistle
+    tests below opt back in explicitly."""
+    import claude_usage_daemon as daemon
+    monkeypatch.setattr(daemon, "resolve_voice_engine", lambda _choice: "whisper")
+
 STEP_TABLE = [
     7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31,
     34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143,
@@ -207,7 +215,7 @@ def test_8khz_transport_is_upsampled_for_whisper(monkeypatch):
     asyncio.run(sess.drain_voice())
 
     assert typed == [16 * 176 * 2]
-    assert {"t": "vt", "tx": "fallback works"} in replies
+    assert any(r.get("t") == "vt" and r.get("tx") == "fallback works" for r in replies)
 
 
 @pytest.mark.parametrize("bad_flags", [0x05, 0x01])
@@ -269,7 +277,7 @@ def test_restarted_stream_discards_stale_partial(monkeypatch):
     asyncio.run(sess.drain_voice())
 
     assert typed == [20 * 350]    # only the fresh utterance
-    assert {"t": "vt", "tx": "ok"} in replies
+    assert any(r.get("t") == "vt" and r.get("tx") == "ok" for r in replies)
     assert not any(r.get("t") == "err" for r in replies)
 
 
