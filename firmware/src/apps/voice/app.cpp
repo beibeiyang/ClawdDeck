@@ -8,6 +8,7 @@
 #include "../../hal/audio_in_hal.h"
 #include "voice_layout.h"
 #include <Arduino.h>
+#include <ArduinoJson.h>
 
 LV_FONT_DECLARE(font_inter_20);
 LV_FONT_DECLARE(font_inter_32);
@@ -25,7 +26,7 @@ enum voice_state_t {
     VOICE_IDLE,
     VOICE_RECORDING,       // PTT path: HID Space held (drive the Mac's voice mode)
     VOICE_PROCESSING,      // PTT path: waiting out the Mac's pipeline
-    VOICE_DICTATING,       // dictate path: mic → ADPCM → BLE → daemon whisper
+    VOICE_DICTATING,       // dictate path: mic → ADPCM → BLE → daemon STT (live 'vp' text)
     VOICE_TRANSCRIBING,    // dictate path: EOU sent, waiting for 'vt' reply
 };
 
@@ -47,6 +48,95 @@ static uint8_t  dict_block[179];     // negotiated ADPCM block awaiting a notify
 static size_t   dict_block_len  = 0;
 static uint8_t  dict_audio_flags = 0; // bit1 = 8 kHz; bit2 reserved for overrun on EOU
 static uint32_t dict_sent_blocks = 0;
+
+// ---- Live transcript ('vp' partials from the daemon) ------------------------
+// The daemon sends {"t":"vp","c":<committed>,"p":<pending>} a few times a
+// second while you talk. Committed words never change; the pending tail is
+// the model's current guess and renders dimmed. The transcript box holds only
+// a few lines, so the oldest words are trimmed from the left to keep the
+// newest speech visible on every panel size.
+static size_t live_char_budget = 80;    // computed from the box in voice_create
+#define LIVE_MAX_LINES 2                  // a glanceable ticker, not a document
+
+// The usage hint lives in the transcript box. Live text, results and errors
+// borrow the box briefly; the hint comes back after HINT_*_MS of idle so the
+// panel never strands stale text.
+#define VOICE_HINT "Hold the mic to dictate.\nHold BOOT for Mac voice mode."
+#define HINT_AFTER_STATUS_MS      4000    // "Typed 12 words on your Mac"
+#define HINT_AFTER_ERROR_MS       6000
+#define HINT_AFTER_TRANSCRIPT_MS 15000    // display-only mode: time to read
+static uint32_t hint_due_at = 0;          // 0 = nothing scheduled
+
+// Measure how many characters of the transcript font fit the fixed box.
+static size_t transcript_char_budget(const lv_font_t* font, int w, int h) {
+    static const char sample[] = "the quick brown fox jumps over a lazy dog";
+    lv_point_t sz;
+    lv_text_get_size(&sz, sample, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    const int avg_px = sz.x > 0 ? sz.x / (int)(sizeof(sample) - 1) : 8;
+    const int line_h = lv_font_get_line_height(font) + 2;
+    int lines        = line_h > 0 ? h / line_h : 2;
+    if (lines > LIVE_MAX_LINES) lines = LIVE_MAX_LINES;
+    const int cpl    = avg_px > 0 ? w / avg_px : 40;
+    const int budget = cpl * lines * 85 / 100;   // wrap slack: lines break at words
+    return budget > 24 ? (size_t)budget : 24;
+}
+
+// Copy src into dst minus LVGL recolor markers ('#' toggles color runs).
+static size_t copy_plain(char* dst, size_t cap, const char* src) {
+    size_t o = 0;
+    for (; src && *src && o + 1 < cap; src++) {
+        if (*src != '#') dst[o++] = *src;
+    }
+    dst[o] = '\0';
+    return o;
+}
+
+static void show_live(const char* committed, const char* pending) {
+    if (!transcript) return;
+    hint_due_at = 0;
+    static char c[200], p[100], out[340];
+    size_t cn = copy_plain(c, sizeof(c), committed);
+    const size_t pn = copy_plain(p, sizeof(p), pending);
+
+    // Trim old committed words so committed + pending fit the box.
+    const char* cstart = c;
+    const size_t room = live_char_budget > pn + 1 ? live_char_budget - pn - 1 : 0;
+    bool trimmed = false;
+    if (cn > room) {
+        cstart = c + (cn - room);
+        const char* sp = strchr(cstart, ' ');
+        if (sp && sp - cstart < 20) cstart = sp + 1;
+        cn = strlen(cstart);
+        trimmed = true;
+    }
+    // Dim gray for the unconfirmed tail via LVGL inline recolor.
+    snprintf(out, sizeof(out), "%s%s%s%s%s%s",
+             trimmed ? "..." : "", cstart,
+             (cn && pn) ? " " : "",
+             pn ? "#7c8288 " : "", p, pn ? "#" : "");
+    lv_label_set_recolor(transcript, true);
+    lv_obj_set_style_text_color(transcript, THEME_TEXT, 0);
+    lv_label_set_text(transcript, out);
+}
+
+static void show_message(const char* msg, bool final_text) {
+    if (!transcript) return;
+    hint_due_at = 0;
+    lv_label_set_recolor(transcript, false);
+    lv_obj_set_style_text_color(transcript, final_text ? THEME_TEXT : THEME_DIM, 0);
+    lv_label_set_text(transcript, msg);
+}
+
+static void show_hint(void) {
+    show_message(VOICE_HINT, false);
+}
+
+// Show msg now, then fall back to the usage hint after delay_ms.
+static void show_then_hint(const char* msg, bool final_text, uint32_t delay_ms) {
+    show_message(msg, final_text);
+    hint_due_at = lv_tick_get() + delay_ms;
+    if (!hint_due_at) hint_due_at = 1;   // 0 means "none"
+}
 
 // Send every captured block that's ready. A block whose notify fails (link
 // busy) is kept and retried first next time, so nothing is dropped here.
@@ -148,13 +238,12 @@ static void set_state(voice_state_t next) {
 static void ptt_start(void) {
     if (state == VOICE_RECORDING) return;
     if (ble_get_state() != BLE_STATE_CONNECTED) {
-        if (transcript)
-            lv_label_set_text(transcript, "Connect to your Mac first.");
+        show_then_hint("Connect to your Mac first.", false, HINT_AFTER_ERROR_MS);
         return;
     }
     ble_keyboard_press(HID_SPACE, 0);
     set_state(VOICE_RECORDING);
-    if (transcript) lv_label_set_text(transcript, "");
+    show_message("", false);
 }
 
 static void ptt_stop(void) {
@@ -167,20 +256,17 @@ static void ptt_stop(void) {
 static void dictate_start(void) {
     if (state != VOICE_IDLE) return;
     if (ble_get_state() != BLE_STATE_CONNECTED) {
-        if (transcript)
-            lv_label_set_text(transcript, "Connect to your Mac first.");
+        show_then_hint("Connect to your Mac first.", false, HINT_AFTER_ERROR_MS);
         return;
     }
     const size_t payload_capacity = ble_voice_payload_capacity();
     if (!payload_capacity) {
-        if (transcript)
-            lv_label_set_text(transcript, "Voice daemon not ready.");
+        show_then_hint("Voice daemon not ready.", false, HINT_AFTER_ERROR_MS);
         return;
     }
     mic_capture_ok = audio_in_hal_start_voice(payload_capacity);
     if (!mic_capture_ok) {
-        if (transcript)
-            lv_label_set_text(transcript, "Bluetooth audio link is too small.");
+        show_then_hint("Bluetooth audio link is too small.", false, HINT_AFTER_ERROR_MS);
         return;
     }
     dict_seq       = 0;
@@ -188,7 +274,7 @@ static void dictate_start(void) {
     dict_sent_blocks = 0;
     dict_audio_flags = audio_in_hal_voice_sample_rate() == 8000 ? 0x02 : 0x00;
     set_state(VOICE_DICTATING);
-    if (transcript) lv_label_set_text(transcript, "");
+    show_message("", false);
 }
 
 static void dictate_stop(void) {
@@ -313,9 +399,7 @@ static void voice_create(lv_obj_t* root) {
     lv_obj_set_style_bg_color(level_bar, THEME_ACCENT, LV_PART_INDICATOR);
 
     transcript = lv_label_create(root);
-    lv_label_set_text(transcript,
-                      "Hold the mic to dictate.\n"
-                      "Hold BOOT for Mac voice mode.");
+    lv_label_set_text(transcript, VOICE_HINT);
     lv_obj_set_style_text_font(transcript,
                                compact ? &font_inter_14 : &font_inter_16, 0);
     lv_obj_set_style_text_color(transcript, THEME_DIM, 0);
@@ -329,11 +413,14 @@ static void voice_create(lv_obj_t* root) {
     lv_obj_set_pos(transcript, layout.transcript.x, layout.transcript.y);
     lv_label_set_long_mode(transcript, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_line_space(transcript, compact ? 1 : 2, 0);
+    live_char_budget = transcript_char_budget(compact ? &font_inter_14 : &font_inter_16,
+                                              layout.transcript.w, layout.transcript.h);
 
     set_state(VOICE_IDLE);
 }
 
 static void voice_destroy(void) {
+    hint_due_at = 0;
     // A dictation cut short by leaving the app: stop the mic + close the
     // chunk stream so the daemon doesn't wait on an EOU that never comes.
     if (state == VOICE_DICTATING) dictate_finish();
@@ -355,6 +442,11 @@ static bool voice_on_button(app_btn_t btn) {
 }
 
 static void voice_tick(void) {
+    if (hint_due_at && state == VOICE_IDLE &&
+        (int32_t)(lv_tick_get() - hint_due_at) >= 0) {
+        show_hint();
+    }
+
     // PTT (BOOT-held) release detection — unchanged.
     if (ptt_via_primary && state == VOICE_RECORDING &&
         !input_hal_is_held(INPUT_BTN_PRIMARY)) {
@@ -374,39 +466,41 @@ static void voice_tick(void) {
         dictate_stop();
     }
 
-    // Dictate reply: the 'vt' payload from the daemon (JSON bridge rx).
-    if (state == VOICE_TRANSCRIBING) {
+    // Daemon replies over the JSON bridge: live 'vp' partials while dictating
+    // (and any that land just after release), then the final 'vt' or an 'err'.
+    if (state == VOICE_DICTATING || state == VOICE_TRANSCRIBING) {
         const char* rx = ble_bridge_take_rx();
-        if (rx && strstr(rx, "\"t\":\"vt\"")) {
-            const char* tx = strstr(rx, "\"tx\":\"");
-            if (tx) {
-                tx += 5;
-                static char msg[480];
-                size_t o = 0;
-                while (*tx && *tx != '"' && o < sizeof(msg) - 1) {
-                    msg[o++] = *tx++;          // no escapes emitted by the daemon
-                }
-                msg[o] = '\0';
+        JsonDocument doc;   // allocates only when a message is parsed
+        if (rx && deserializeJson(doc, rx) == DeserializationError::Ok) {
+            const char* typ = doc["t"] | "";
+            if (strcmp(typ, "vp") == 0) {
+                show_live(doc["c"] | "", doc["p"] | "");
+            } else if (state == VOICE_TRANSCRIBING && strcmp(typ, "vt") == 0) {
                 set_state(VOICE_IDLE);
-                if (transcript) lv_label_set_text(transcript, msg);
+                // "inj" = what the Mac did with the text. When it was typed
+                // into the focused app the panel needs only a one-line
+                // receipt (the full text is on the Mac). Display-only mode
+                // ("off") or an older daemon (no "inj") shows the transcript.
+                const char* inj = doc["inj"] | "off";
+                const char* m   = doc["m"] | "";
+                if (strcmp(inj, "off") == 0 || !*m) {
+                    show_then_hint(doc["tx"] | "", true, HINT_AFTER_TRANSCRIPT_MS);
+                } else {
+                    const bool ok = strcmp(inj, "ok") == 0;
+                    show_then_hint(m, ok, ok ? HINT_AFTER_STATUS_MS : HINT_AFTER_ERROR_MS);
+                }
+            } else if (state == VOICE_TRANSCRIBING && strcmp(typ, "err") == 0) {
+                set_state(VOICE_IDLE);
+                // Show the daemon's message ("m"); generic text if it has none.
+                const char* m = doc["m"] | "";
+                show_then_hint(*m ? m : "Host error - see daemon log.", false,
+                               HINT_AFTER_ERROR_MS);
             }
-        } else if (rx && strstr(rx, "\"t\":\"err\"")) {
-            set_state(VOICE_IDLE);
-            // Show the daemon's message ("m"); generic text if it has none.
-            static char msg[96];
-            const char* m = strstr(rx, "\"m\":\"");
-            size_t o = 0;
-            if (m) {
-                m += 5;
-                while (*m && *m != '"' && o < sizeof(msg) - 1) msg[o++] = *m++;
-            }
-            msg[o] = '\0';
-            if (transcript)
-                lv_label_set_text(transcript, o ? msg : "Host error — see daemon log.");
         }
-        if (lv_tick_elaps(processing_at) > 15000) {  // 15s no reply = give up
+        if (state == VOICE_TRANSCRIBING &&
+            lv_tick_elaps(processing_at) > 15000) {  // 15s no reply = give up
             set_state(VOICE_IDLE);
-            if (transcript) lv_label_set_text(transcript, "Transcription timed out.");
+            show_then_hint("Transcription timed out.", false, HINT_AFTER_ERROR_MS);
         }
     }
 
@@ -414,11 +508,7 @@ static void voice_tick(void) {
         lv_tick_elaps(processing_at) > 1200) {
         processing_at = 0;
         set_state(VOICE_IDLE);
-        if (transcript) {
-            lv_label_set_text(transcript,
-                              "Voice mode toggled on your Mac.\n"
-                              "Transcription display needs the host bridge.");
-        }
+        show_then_hint("Voice mode toggled on your Mac.", false, HINT_AFTER_STATUS_MS);
     }
 }
 
@@ -427,7 +517,7 @@ extern const AppDef app_voice = {
     .title         = "Voice",
     .glyph         = PH_WAVEFORM,
     .tile_rgb      = 0x5f8f46,
-    .blurb         = "Hold to talk. Whisper runs on your Mac and the text goes straight into Claude Code.",
+    .blurb         = "Hold to talk. Live speech-to-text on your Mac, typed straight into Claude Code.",
     .required_caps = APP_CAP_MIC | APP_CAP_WIFI | APP_CAP_PSRAM,
     .persistent    = false,
     .immersive     = false,
